@@ -1,4 +1,4 @@
-<<<<<<< HEAD
+
 # TripPing for Business
 
 TripPing 앱에서 수집된 여행 데이터를 여행사/지자체에게 보여주는 B2B 대시보드 웹페이지.
