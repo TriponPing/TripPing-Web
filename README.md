@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # TripPing for Business
 
 TripPing 앱에서 수집된 여행 데이터를 여행사/지자체에게 보여주는 B2B 대시보드 웹페이지.
@@ -38,3 +39,6 @@ src/
 - `Layout.jsx`에 로그인 가드 추가 (미로그인 시 `/login`으로 리다이렉트)
 - `ProductDetail.jsx`의 AI 추천 루트에 카카오맵/네이버 지도 JS SDK 연동
 - 여행사 계정 회원가입/권한 관리 플로우
+=======
+# TripPing-Web
+>>>>>>> 03f609ee46c9ec45db64129190b2dbfabc3d07ac
