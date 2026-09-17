@@ -1,44 +1,33 @@
-<<<<<<< HEAD
-# TripPing for Business
+# TripPing for Business — Insight Portal (Frontend)
 
-TripPing 앱에서 수집된 여행 데이터를 여행사/지자체에게 보여주는 B2B 대시보드 웹페이지.
+여행사·지자체 담당자를 위한 TripPing B2B 대시보드 프론트엔드입니다. React + tRPC(client) + shadcn/ui 기반이며,
+백엔드(Express + tRPC + Drizzle/MySQL)는 별도 프로젝트로 분리되어 있습니다.
 
 ## 시작하기
 
-```
+```bash
 npm install
-npm run dev
+cp .env.example .env   # VITE_API_URL에 백엔드 주소 입력
+npm run dev             # http://localhost:5173 (vite 기본 포트)
 ```
 
-## 페이지 구조
+### `.env` 값 채우기
 
-| 경로 | 화면 | 목적 | 필요 데이터 |
-|---|---|---|---|
-| `/login` | B2B 로그인 | 여행사/지자체 계정 로그인 | 인증 API |
-| `/` | 대시보드 홈 | 최근 트렌드 요약 카드 + 주요 지표 | 트렌드 요약 API |
-| `/trends` | 트렌드 분석 | 지역/기간 필터 + 차트 | 트렌드 상세 API |
-| `/products` | 관광상품 기획 목록 | 기획한 상품 리스트 | 상품 목록 API |
-| `/products/:id` | 관광상품 상세/편집 | AI 추천 루트 기반 상품 편집 | 상품 상세 API |
-| `/settings` | 조직 설정 | 계정/조직 정보 관리 | 조직 정보 API |
+| 변수 | 설명 |
+| --- | --- |
+| `VITE_API_URL` | 백엔드 tRPC API의 base URL (예: `https://api.tripping.example.com`). 비워두면 같은 origin의 `/api/trpc`로 요청합니다. |
 
-## 폴더 구조
+## 타입 안전성 관련 참고
 
-```
-src/
-  components/   Layout, Sidebar, Header 등 공통 UI
-  pages/        위 표의 6개 화면
-  services/     백엔드 API 연동 (지금은 목업 데이터 사용 중, api.js의 USE_MOCK 참고)
-  mock/         실제 API 나오기 전까지 쓰는 목업 데이터
-  styles/       전역 스타일
-```
+원래는 `client/src/lib/trpc.ts`에서 백엔드의 `AppRouter` 타입을 직접 import해서 프론트/백엔드 간 완전한 타입 안전성을 가졌지만,
+백엔드가 별도 프로젝트로 분리되면서 지금은 `trpc.someRouter.someProcedure` 호출이 타입 체크/자동완성이 되지 않습니다.
+나중에 다시 타입 안전성을 원하면:
+1. 백엔드의 `AppRouter` 타입만 뽑아서 작은 공유 패키지로 배포하거나,
+2. 두 프로젝트를 하나의 모노레포(npm/pnpm workspace)로 묶어서 상대 경로로 다시 import하면 됩니다.
 
-## 다음에 할 일
+## 스크립트
 
-- TripPing-Backend에 B2B용 API 추가: 인증, 트렌드 요약/상세, 상품 목록/상세/수정, 조직 정보
-- `src/services/api.js`의 `USE_MOCK`을 `false`로 바꾸고 실제 엔드포인트 연결
-- `Layout.jsx`에 로그인 가드 추가 (미로그인 시 `/login`으로 리다이렉트)
-- `ProductDetail.jsx`의 AI 추천 루트에 카카오맵/네이버 지도 JS SDK 연동
-- 여행사 계정 회원가입/권한 관리 플로우
-=======
-# TripPing-Web
->>>>>>> 03f609ee46c9ec45db64129190b2dbfabc3d07ac
+- `npm run dev` — 개발 서버 (Vite)
+- `npm run build` — 프로덕션 빌드 (`dist/`)
+- `npm run preview` — 빌드 결과 로컬 미리보기
+- `npm run check` — TypeScript 타입 체크
