@@ -123,3 +123,114 @@ export const placesApi = {
   detail: (spotId: number) => api.get<PlaceDetail>(`/places/${spotId}/detail`),
   regions: () => api.get<Region[]>("/regions"),
 };
+
+// 기관 전용 - 관광상품 기획 (B2bProductController).
+// 백엔드는 진행 상태를 코드로 다루고 화면은 한글로 보여주므로 여기서 옮긴다.
+export const PRODUCT_STATUS = {
+  DRAFT: "초안",
+  REVIEW: "검토 중",
+  DONE: "완료",
+  PUBLISHED: "게시",
+} as const;
+
+export type ProductStatusCode = keyof typeof PRODUCT_STATUS;
+
+export type ProductSpot = {
+  spotId: number;
+  name: string | null;
+  address: string | null;
+  visitOrder: number;
+  stayDuration: number | null;
+};
+
+export type ProductSummary = {
+  productId: number;
+  productName: string;
+  status: ProductStatusCode;
+  regionId: string | null;
+  regionName: string | null;
+  price: number | null;
+  spotCount: number;
+  updatedAt: string | null;
+  createdAt: string;
+};
+
+export type ProductDetail = ProductSummary & {
+  targetCustomer: string | null;
+  expectedDuration: number | null; // 분 단위
+  transport: string | null;
+  mealIncluded: boolean | null;
+  trendBasis: string | null;
+  description: string | null;
+  spots: ProductSpot[];
+  hashtags: string[];
+};
+
+// null인 항목은 "바꾸지 않음"으로 처리된다. spots·hashtags는 예외로,
+// 보낸 배열이 통째로 현재 상태가 된다.
+export type ProductUpdate = Partial<{
+  productName: string;
+  status: ProductStatusCode;
+  regionId: string | null;
+  targetCustomer: string;
+  expectedDuration: number;
+  description: string;
+  price: number;
+  spots: { spotId: number; stayDuration?: number | null }[];
+  hashtags: string[];
+}>;
+
+export const productsApi = {
+  list: () => api.get<ProductSummary[]>("/b2b/products"),
+  detail: (productId: number) =>
+    api.get<ProductDetail>(`/b2b/products/${productId}`),
+  create: (data?: { productName?: string; regionId?: string }) =>
+    api.post<ProductDetail>("/b2b/products", data ?? {}),
+  update: (productId: number, data: ProductUpdate) =>
+    api.patch<ProductDetail>(`/b2b/products/${productId}`, data),
+  remove: (productId: number) => api.delete(`/b2b/products/${productId}`),
+};
+
+// 기관 전용 - 조직 설정 (B2bOrganizationController).
+export type OrgProfile = {
+  orgId: number;
+  orgName: string;
+  orgType: string;
+  managerName: string;
+  managerEmail: string;
+  department: string | null;
+  description: string | null;
+  logoUrl: string | null;
+  status: "PENDING" | "APPROVED" | "REJECTED";
+};
+
+export type NotificationSetting = {
+  notifyTrend: boolean;
+  notifyReport: boolean;
+  notifyWeekly: boolean;
+};
+
+// plainKey는 발급 응답에만 한 번 담겨 온다. 목록에서는 항상 null이라
+// 사용자가 그 자리에서 복사하도록 안내해야 한다.
+export type ApiKey = {
+  keyId: number;
+  label: string;
+  keyPrefix: string;
+  plainKey: string | null;
+  createdAt: string;
+};
+
+export const organizationApi = {
+  profile: () => api.get<OrgProfile>("/b2b/organization"),
+  updateProfile: (data: Partial<Omit<OrgProfile, "orgId" | "status">>) =>
+    api.patch<OrgProfile>("/b2b/organization", data),
+  notifications: () =>
+    api.get<NotificationSetting>("/b2b/organization/notifications"),
+  updateNotifications: (data: Partial<NotificationSetting>) =>
+    api.patch<NotificationSetting>("/b2b/organization/notifications", data),
+  apiKeys: () => api.get<ApiKey[]>("/b2b/organization/api-keys"),
+  issueApiKey: (label: string) =>
+    api.post<ApiKey>("/b2b/organization/api-keys", { label }),
+  revokeApiKey: (keyId: number) =>
+    api.delete(`/b2b/organization/api-keys/${keyId}`),
+};

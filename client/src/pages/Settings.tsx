@@ -2,6 +2,7 @@ import {
   Bell,
   Building2,
   Check,
+  Copy,
   KeyRound,
   Plus,
   Save,
@@ -9,69 +10,126 @@ import {
   Trash2,
   UserRound,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import PortalChrome from "@/components/PortalChrome";
-import { authApi } from "@/lib/api";
 import {
-  hydrateFromAccount,
-  issueApiKey,
-  organizationTypes,
-  revokeApiKey,
-  saveOrganization,
-  useOrganization,
-  type Organization,
-} from "@/lib/organizationStore";
+  organizationApi,
+  type NotificationSetting,
+  type OrgProfile,
+} from "@/lib/api";
 
 const tabs = ["조직 정보", "계정 관리", "알림 설정", "API 관리"] as const;
 
 type Tab = (typeof tabs)[number];
 
+// 백엔드 orgType 코드와 화면에서 고르는 값의 대응.
+const ORG_TYPES = [
+  { code: "public_institution", label: "지자체·공공기관" },
+  { code: "travel_company", label: "여행사·관광기업" },
+];
+
+type ProfileDraft = Pick<
+  OrgProfile,
+  "orgName" | "orgType" | "managerName" | "department" | "description"
+>;
+
 export default function Settings() {
-  const organization = useOrganization();
+  const queryClient = useQueryClient();
   const [tab, setTab] = useState<Tab>("조직 정보");
-  const [form, setForm] = useState(organization);
+  const [form, setForm] = useState<ProfileDraft | null>(null);
   const [saved, setSaved] = useState(false);
-  const logoInput = useRef<HTMLInputElement>(null);
+  // 발급 직후 한 번만 볼 수 있는 키. 목록에서는 다시 확인할 수 없다.
+  const [issuedKey, setIssuedKey] = useState<string | null>(null);
 
-  useEffect(() => setForm(organization), [organization]);
+  const profile = useQuery({
+    queryKey: ["organization"],
+    queryFn: () => organizationApi.profile().then(res => res.data),
+  });
 
-  // 조직명·담당자는 로그인한 기관 계정이 이미 갖고 있다. 시드 값을 보여주는
-  // 대신 실제 계정에서 가져온다.
+  const notifications = useQuery({
+    queryKey: ["organization", "notifications"],
+    queryFn: () => organizationApi.notifications().then(res => res.data),
+  });
+
+  const apiKeys = useQuery({
+    queryKey: ["organization", "api-keys"],
+    queryFn: () => organizationApi.apiKeys().then(res => res.data),
+  });
+
   useEffect(() => {
-    authApi
-      .me()
-      .then(({ data }) => {
-        if (data.type === "org") hydrateFromAccount(data);
-      })
-      .catch(() => {
-        // 계정 정보를 못 읽으면 저장해둔 값만으로 화면을 유지한다.
-      });
-  }, []);
+    if (!profile.data) return;
+    const { orgName, orgType, managerName, department, description } =
+      profile.data;
+    setForm({ orgName, orgType, managerName, department, description });
+  }, [profile.data]);
 
-  const patch = (changes: Partial<Organization>) => {
-    setForm(current => ({ ...current, ...changes }));
+  const saveProfile = useMutation({
+    mutationFn: (next: ProfileDraft) =>
+      organizationApi.updateProfile(next).then(res => res.data),
+    onSuccess: next => {
+      queryClient.setQueryData(["organization"], next);
+      setSaved(true);
+      toast.success("조직 정보를 저장했습니다.");
+    },
+    onError: () => toast.error("저장하지 못했습니다."),
+  });
+
+  const saveNotifications = useMutation({
+    mutationFn: (next: Partial<NotificationSetting>) =>
+      organizationApi.updateNotifications(next).then(res => res.data),
+    onSuccess: next => {
+      queryClient.setQueryData(["organization", "notifications"], next);
+      toast.success("알림 설정을 저장했습니다.");
+    },
+    onError: () => toast.error("저장하지 못했습니다."),
+  });
+
+  const issueKey = useMutation({
+    mutationFn: (label: string) =>
+      organizationApi.issueApiKey(label).then(res => res.data),
+    onSuccess: key => {
+      setIssuedKey(key.plainKey);
+      queryClient.invalidateQueries({ queryKey: ["organization", "api-keys"] });
+    },
+    onError: () => toast.error("API 키를 발급하지 못했습니다."),
+  });
+
+  const revokeKey = useMutation({
+    mutationFn: (keyId: number) => organizationApi.revokeApiKey(keyId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["organization", "api-keys"] });
+      toast.success("API 키를 폐기했습니다.");
+    },
+    onError: () => toast.error("폐기하지 못했습니다."),
+  });
+
+  const patch = (changes: Partial<ProfileDraft>) => {
+    setForm(current => (current ? { ...current, ...changes } : current));
     setSaved(false);
   };
 
-  const save = () => {
-    saveOrganization(form);
-    setSaved(true);
-    toast.success("변경사항을 저장했습니다.");
-  };
+  if (!form) {
+    return (
+      <PortalChrome title="조직 설정" eyebrow="ORGANIZATION SETTINGS">
+        <div className="product-tip">
+          <div>
+            <Building2 size={20} />
+          </div>
+          <span>
+            <b>
+              {profile.isError
+                ? "조직 정보를 불러오지 못했습니다."
+                : "조직 정보를 불러오는 중입니다."}
+            </b>
+          </span>
+        </div>
+      </PortalChrome>
+    );
+  }
 
-  // 로고는 data URL로 브라우저에 저장하므로 용량을 제한한다.
-  const readLogo = (file: File | undefined) => {
-    if (!file) return;
-    if (file.size > 300 * 1024) {
-      toast.error("로고 이미지는 300KB 이하로 올려주세요.");
-      return;
-    }
-    const reader = new FileReader();
-    reader.onload = () => patch({ logo: String(reader.result) });
-    reader.onerror = () => toast.error("이미지를 읽지 못했습니다.");
-    reader.readAsDataURL(file);
-  };
+  const notify = notifications.data;
 
   return (
     <PortalChrome title="조직 설정" eyebrow="ORGANIZATION SETTINGS">
@@ -95,10 +153,14 @@ export default function Settings() {
               <h2>{tab}</h2>
               <p>{descriptionFor(tab)}</p>
             </div>
-            {tab !== "API 관리" && (
-              <button className="settings-save" onClick={save}>
+            {(tab === "조직 정보" || tab === "계정 관리") && (
+              <button
+                className="settings-save"
+                onClick={() => saveProfile.mutate(form)}
+                disabled={saveProfile.isPending}
+              >
                 <Save size={14} />
-                저장하기
+                {saveProfile.isPending ? "저장 중…" : "저장하기"}
               </button>
             )}
           </div>
@@ -107,55 +169,33 @@ export default function Settings() {
             <>
               <div className="settings-avatar">
                 <div>
-                  {form.logo ? (
-                    <img
-                      src={form.logo}
-                      alt="기관 로고"
-                      style={{
-                        width: "100%",
-                        height: "100%",
-                        objectFit: "cover",
-                        borderRadius: 10,
-                      }}
-                    />
-                  ) : (
-                    <Building2 size={23} />
-                  )}
+                  <Building2 size={23} />
                 </div>
                 <span>
-                  <b>{form.name || "조직명을 입력하세요"}</b>
-                  <small>기관 로고를 등록하면 보고서에 함께 표시됩니다.</small>
+                  <b>{form.orgName || "조직명을 입력하세요"}</b>
+                  <small>
+                    기관 로고 업로드는 파일 저장소 연동 후에 붙일 예정입니다.
+                  </small>
                 </span>
-                <input
-                  ref={logoInput}
-                  type="file"
-                  accept="image/png,image/jpeg,image/svg+xml"
-                  hidden
-                  onChange={event => readLogo(event.target.files?.[0])}
-                />
-                <button onClick={() => logoInput.current?.click()}>
-                  {form.logo ? "로고 교체" : "로고 변경"}
-                </button>
-                {form.logo && (
-                  <button onClick={() => patch({ logo: "" })}>삭제</button>
-                )}
               </div>
               <div className="settings-fields">
                 <label>
                   조직명
                   <input
-                    value={form.name}
-                    onChange={event => patch({ name: event.target.value })}
+                    value={form.orgName}
+                    onChange={event => patch({ orgName: event.target.value })}
                   />
                 </label>
                 <label>
                   기관 유형
                   <select
-                    value={form.type}
-                    onChange={event => patch({ type: event.target.value })}
+                    value={form.orgType}
+                    onChange={event => patch({ orgType: event.target.value })}
                   >
-                    {organizationTypes.map(type => (
-                      <option key={type}>{type}</option>
+                    {ORG_TYPES.map(type => (
+                      <option key={type.code} value={type.code}>
+                        {type.label}
+                      </option>
                     ))}
                   </select>
                 </label>
@@ -163,7 +203,7 @@ export default function Settings() {
                   담당 부서
                   <input
                     placeholder="예: 관광데이터전략팀"
-                    value={form.department}
+                    value={form.department ?? ""}
                     onChange={event =>
                       patch({ department: event.target.value })
                     }
@@ -171,17 +211,13 @@ export default function Settings() {
                 </label>
                 <label>
                   업무용 이메일
-                  <input
-                    type="email"
-                    value={form.email}
-                    onChange={event => patch({ email: event.target.value })}
-                  />
+                  <input value={profile.data?.managerEmail ?? ""} readOnly />
                 </label>
                 <label className="full">
                   조직 소개
                   <textarea
                     placeholder="어떤 일을 하는 기관인지 적어주세요. 보고서에 함께 표시됩니다."
-                    value={form.description}
+                    value={form.description ?? ""}
                     onChange={event =>
                       patch({ description: event.target.value })
                     }
@@ -194,90 +230,125 @@ export default function Settings() {
           {tab === "계정 관리" && (
             <div className="settings-fields">
               <label>
-                이름
+                담당자 이름
                 <input
-                  value={form.contactName}
-                  onChange={event => patch({ contactName: event.target.value })}
+                  value={form.managerName}
+                  onChange={event => patch({ managerName: event.target.value })}
                 />
               </label>
               <label>
-                직무
-                <input
-                  placeholder="예: 관광데이터 분석"
-                  value={form.contactRole}
-                  onChange={event => patch({ contactRole: event.target.value })}
-                />
+                로그인 이메일
+                <input value={profile.data?.managerEmail ?? ""} readOnly />
               </label>
               <label className="full">
-                업무용 이메일
-                <input
-                  type="email"
-                  value={form.email}
-                  onChange={event => patch({ email: event.target.value })}
-                />
+                <small style={{ color: "#9eacb2", fontSize: 9 }}>
+                  로그인 이메일은 계정 아이디라 이 화면에서 바꿀 수 없습니다.
+                </small>
               </label>
             </div>
           )}
 
           {tab === "알림 설정" && (
             <div className="settings-fields">
-              <ToggleField
-                label="급상승 트렌드 알림"
-                hint="담당 지역에서 급상승 루트가 발견되면 알립니다."
-                checked={form.notifyTrend}
-                onChange={value => patch({ notifyTrend: value })}
-              />
-              <ToggleField
-                label="보고서 완료 알림"
-                hint="보고서 생성이 끝나면 알립니다."
-                checked={form.notifyReport}
-                onChange={value => patch({ notifyReport: value })}
-              />
-              <ToggleField
-                label="주간 요약 메일"
-                hint="매주 월요일 지난주 방문 추이를 메일로 받습니다."
-                checked={form.notifyWeekly}
-                onChange={value => patch({ notifyWeekly: value })}
-              />
+              {notify ? (
+                <>
+                  <ToggleField
+                    label="급상승 트렌드 알림"
+                    hint="담당 지역에서 급상승 루트가 발견되면 알립니다."
+                    checked={notify.notifyTrend}
+                    onChange={value =>
+                      saveNotifications.mutate({ notifyTrend: value })
+                    }
+                  />
+                  <ToggleField
+                    label="보고서 완료 알림"
+                    hint="보고서 생성이 끝나면 알립니다."
+                    checked={notify.notifyReport}
+                    onChange={value =>
+                      saveNotifications.mutate({ notifyReport: value })
+                    }
+                  />
+                  <ToggleField
+                    label="주간 요약 메일"
+                    hint="매주 월요일 지난주 방문 추이를 메일로 받습니다."
+                    checked={notify.notifyWeekly}
+                    onChange={value =>
+                      saveNotifications.mutate({ notifyWeekly: value })
+                    }
+                  />
+                  <p
+                    className="full"
+                    style={{ color: "#9eacb2", fontSize: 9, marginTop: 4 }}
+                  >
+                    설정은 바로 저장됩니다. 실제 발송은 메일·푸시 연동 후에
+                    동작합니다.
+                  </p>
+                </>
+              ) : (
+                <p style={{ color: "#9aa9af", fontSize: 10 }}>
+                  알림 설정을 불러오는 중입니다.
+                </p>
+              )}
             </div>
           )}
 
           {tab === "API 관리" && (
             <div style={{ marginTop: 18 }}>
-              {form.apiKeys.map(key => (
-                <div className="info-line" key={key.id}>
+              {issuedKey && (
+                <div className="saved-note" style={{ marginBottom: 14 }}>
+                  <Check size={14} />
+                  <span style={{ flex: 1 }}>
+                    <b style={{ display: "block" }}>
+                      이 키는 지금만 볼 수 있습니다. 복사해두세요.
+                    </b>
+                    <code style={{ fontSize: 10 }}>{issuedKey}</code>
+                  </span>
+                  <button
+                    style={{ background: "transparent", color: "#379a73" }}
+                    onClick={() => {
+                      navigator.clipboard
+                        ?.writeText(issuedKey)
+                        .then(() => toast.success("복사했습니다."))
+                        .catch(() => toast.error("복사하지 못했습니다."));
+                    }}
+                  >
+                    <Copy size={14} />
+                  </button>
+                </div>
+              )}
+
+              {(apiKeys.data ?? []).map(key => (
+                <div className="info-line" key={key.keyId}>
                   <span>
                     <KeyRound size={14} />
                     {key.label}
                   </span>
-                  <b style={{ fontFamily: "monospace" }}>
-                    {key.id.slice(0, 6)}••••{key.id.slice(-4)}
-                  </b>
+                  <b style={{ fontFamily: "monospace" }}>{key.keyPrefix}••••</b>
                   <button
                     style={{ background: "transparent", color: "#b2bec2" }}
-                    onClick={() => {
-                      revokeApiKey(key.id);
-                      toast.success("API 키를 폐기했습니다.");
-                    }}
+                    onClick={() => revokeKey.mutate(key.keyId)}
                   >
                     <Trash2 size={14} />
                   </button>
                 </div>
               ))}
-              {form.apiKeys.length === 0 && (
+
+              {apiKeys.isSuccess && apiKeys.data.length === 0 && (
                 <p style={{ color: "#9aa9af", fontSize: 10 }}>
                   발급된 API 키가 없습니다. 데이터 연동이 필요할 때 발급하세요.
                 </p>
               )}
+
               <button
                 className="settings-save"
                 style={{ marginTop: 18 }}
-                onClick={() => {
-                  issueApiKey(`${form.department} 연동 키`);
-                  toast.success("새 API 키를 발급했습니다.");
-                }}
+                disabled={issueKey.isPending}
+                onClick={() =>
+                  issueKey.mutate(`${form.department || form.orgName} 연동 키`)
+                }
               >
-                <Plus size={14} />새 API 키 발급
+                <Plus size={14} />
+                {issueKey.isPending ? "발급 중…" : "새 API 키 발급"}
               </button>
             </div>
           )}
@@ -295,22 +366,22 @@ export default function Settings() {
             <div className="mini-icon blue">
               <ShieldCheck size={18} />
             </div>
-            <b>기관 계정 인증 완료</b>
-            <p>
-              운영자 승인일
-              <br />
-              2026. 08. 12
-            </p>
-            <span>검증된 계정</span>
+            <b>
+              {profile.data?.status === "APPROVED"
+                ? "기관 계정 인증 완료"
+                : "승인 대기 중"}
+            </b>
+            <p>{profile.data?.orgName}</p>
+            <span>
+              {profile.data?.status === "APPROVED" ? "검증된 계정" : "대기"}
+            </span>
           </section>
           <section className="portal-panel setting-menu">
             <button onClick={() => setTab("계정 관리")}>
               <UserRound size={15} />
               <span>
                 <b>내 프로필</b>
-                <small>
-                  {form.contactName} · {form.contactRole}
-                </small>
+                <small>{form.managerName}</small>
               </span>
             </button>
             <button onClick={() => setTab("알림 설정")}>
@@ -318,14 +389,9 @@ export default function Settings() {
               <span>
                 <b>알림 설정</b>
                 <small>
-                  {
-                    [
-                      form.notifyTrend,
-                      form.notifyReport,
-                      form.notifyWeekly,
-                    ].filter(Boolean).length
-                  }
-                  개 켜짐
+                  {notify
+                    ? `${[notify.notifyTrend, notify.notifyReport, notify.notifyWeekly].filter(Boolean).length}개 켜짐`
+                    : "불러오는 중"}
                 </small>
               </span>
             </button>
@@ -333,7 +399,7 @@ export default function Settings() {
               <KeyRound size={15} />
               <span>
                 <b>API 키 관리</b>
-                <small>{form.apiKeys.length}개 발급됨</small>
+                <small>{apiKeys.data?.length ?? 0}개 발급됨</small>
               </span>
             </button>
           </section>
