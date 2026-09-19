@@ -3,13 +3,11 @@ import { useState } from "react";
 import { Link } from "wouter";
 import { toast } from "sonner";
 import { useAuth } from "@/_core/hooks/useAuth";
-import { trpc } from "@/lib/trpc";
 
 export default function Landing() {
   const [menuOpen, setMenuOpen] = useState(false);
   const { user, logout } = useAuth();
-  const accessStatus = trpc.access.status.useQuery(undefined, { enabled: Boolean(user), retry: false });
-  const isApproved = user?.role === "admin" || accessStatus.data?.status === "approved";
+  const isApproved = user?.type === "admin" || (user?.type === "org" && user.status === "APPROVED");
   const handleLogout = async () => { await logout(); toast.success("로그아웃되었습니다."); };
   return (
     <div className="landing-shell">
