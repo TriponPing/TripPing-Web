@@ -6,37 +6,47 @@ import {
   GripVertical,
   MapPin,
   Plus,
-  RefreshCw,
   Save,
   Search,
   Sparkles,
+  RefreshCw,
   Star,
   Trash2,
   TriangleAlert,
-  Users,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation, useRoute } from "wouter";
 import { toast } from "sonner";
 import PortalChrome from "@/components/PortalChrome";
 import {
+  placesApi,
+  productsApi,
+  type PlaceSearchResult,
+  type ProductDetail as ProductDetailDto,
+  type Region,
+} from "@/lib/api";
+import {
+  durationLabel,
+  durationMinutes,
+  statusCode,
+  statusLabel,
+  toRouteStops,
+  toSpotPayload,
+} from "@/lib/productMapping";
+import {
   durationOptions,
   formatPrice,
-  needsAlternative,
   productStatuses,
   regionFromAddress,
   stopFromPlace,
-  stopFromSpot,
+  needsAlternative,
   suggestAlternatives,
   targetOptions,
-  UNSET_AREA,
-  type Product,
   type ProductStatus,
   type RouteStop,
 } from "@/lib/productsData";
-import { updateProduct, useProduct } from "@/lib/productsStore";
-import { placesApi, type PlaceSearchResult, type Region } from "@/lib/api";
 
 const fieldStyle = {
   display: "block",
@@ -61,38 +71,31 @@ const tagInputStyle = {
   fontSize: 9,
 } as const;
 
-const stopNameStyle = {
-  width: "100%",
-  border: 0,
-  outline: 0,
-  padding: 0,
-  background: "transparent",
-  color: "#193441",
-  fontSize: 11,
-  fontWeight: 700,
-} as const;
+// 화면에서 편집하는 값. 저장할 때 백엔드 형식으로 옮긴다.
+type Draft = {
+  title: string;
+  description: string;
+  status: ProductStatus;
+  price: number;
+  duration: string;
+  target: string;
+  regionId: string | null;
+  route: RouteStop[];
+  tags: string[];
+};
 
-const stopDescStyle = {
-  width: "100%",
-  border: 0,
-  outline: 0,
-  padding: 0,
-  marginTop: 3,
-  background: "transparent",
-  color: "#99a8ae",
-  fontSize: 9,
-} as const;
-
-function insightText(product: Product) {
-  const visitors = product.monthlyVisitors.toLocaleString("ko-KR");
-  const [first, second] = product.route;
-  if (!first) {
-    return "일정을 추가하면 실제 이동 데이터를 바탕으로 이 조합의 흐름을 분석해 드립니다.";
-  }
-  if (!second) {
-    return `최근 30일 여행객 ${visitors}명이 ${first.name}을(를) 방문했습니다. 다음 관광지를 추가하면 이동 흐름을 분석할 수 있습니다.`;
-  }
-  return `최근 30일 여행객 ${visitors}명이 선택한 순서입니다. ${first.name}에서 ${second.name}(으)로 이어지는 흐름이 특히 강하게 나타납니다.`;
+function toDraft(detail: ProductDetailDto, regions: Region[] = []): Draft {
+  return {
+    title: detail.productName,
+    description: detail.description ?? "",
+    status: statusLabel(detail.status),
+    price: detail.price ?? 0,
+    duration: durationLabel(detail.expectedDuration),
+    target: detail.targetCustomer ?? targetOptions[0],
+    regionId: detail.regionId,
+    route: toRouteStops(detail, regions),
+    tags: detail.hashtags,
+  };
 }
 
 function RouteLine({ route }: { route: RouteStop[] }) {
@@ -106,13 +109,12 @@ function RouteLine({ route }: { route: RouteStop[] }) {
         : 60 + index * ((width - 120) / (route.length - 1)),
     y: 110 + 38 * Math.sin(index * 1.15),
   }));
-  const path = points.map(point => `${point.x},${point.y}`).join(" ");
 
   return (
     <div className="route-map" style={{ marginTop: 15 }}>
       <svg viewBox="0 0 620 200" style={{ width: "100%", height: "100%" }}>
         <polyline
-          points={path}
+          points={points.map(point => `${point.x},${point.y}`).join(" ")}
           fill="none"
           stroke="#0074CE"
           strokeWidth="2.5"
@@ -167,8 +169,10 @@ function RouteLine({ route }: { route: RouteStop[] }) {
 export default function ProductDetail() {
   const [, params] = useRoute("/products/:id");
   const [, navigate] = useLocation();
-  const product = useProduct(params?.id);
-  const [draft, setDraft] = useState<Product | undefined>(product);
+  const queryClient = useQueryClient();
+  const productId = Number(params?.id);
+
+  const [draft, setDraft] = useState<Draft | null>(null);
   const [newTag, setNewTag] = useState("");
   const [spotQuery, setSpotQuery] = useState("");
   const [picking, setPicking] = useState(false);
@@ -176,6 +180,39 @@ export default function ProductDetail() {
   const [results, setResults] = useState<PlaceSearchResult[]>([]);
   const [searching, setSearching] = useState(false);
   const dragFrom = useRef<number | null>(null);
+
+  const product = useQuery({
+    queryKey: ["product", productId],
+    queryFn: () => productsApi.detail(productId).then(res => res.data),
+    enabled: Number.isFinite(productId),
+  });
+
+  const save = useMutation({
+    mutationFn: (next: Draft) =>
+      productsApi
+        .update(productId, {
+          productName: next.title,
+          description: next.description,
+          status: statusCode(next.status),
+          price: next.price,
+          expectedDuration: durationMinutes(next.duration),
+          targetCustomer: next.target,
+          regionId: next.regionId,
+          spots: toSpotPayload(next.route),
+          hashtags: next.tags,
+        })
+        .then(res => res.data),
+    onSuccess: saved => {
+      queryClient.setQueryData(["product", productId], saved);
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+      toast.success("상품을 저장했습니다.");
+    },
+    onError: () => toast.error("저장하지 못했습니다."),
+  });
+
+  useEffect(() => {
+    if (product.data) setDraft(toDraft(product.data, regions));
+  }, [product.data, regions]);
 
   useEffect(() => {
     placesApi
@@ -203,16 +240,22 @@ export default function ProductDetail() {
     return () => clearTimeout(timer);
   }, [spotQuery, picking]);
 
-  useEffect(() => {
-    setDraft(product);
-  }, [product?.id]);
+  if (product.isLoading || (product.isSuccess && !draft)) {
+    return (
+      <PortalChrome title="관광상품 기획" eyebrow="PRODUCT LAB">
+        <div className="product-tip">
+          <div>
+            <Sparkles size={20} />
+          </div>
+          <span>
+            <b>상품을 불러오는 중입니다.</b>
+          </span>
+        </div>
+      </PortalChrome>
+    );
+  }
 
-  const alternatives = useMemo(
-    () => (draft ? suggestAlternatives(draft.area, draft.route) : []),
-    [draft?.area, draft?.route]
-  );
-
-  if (!product || !draft) {
+  if (product.isError || !draft) {
     return (
       <PortalChrome title="관광상품 기획" eyebrow="PRODUCT LAB">
         <div className="product-tip">
@@ -231,23 +274,12 @@ export default function ProductDetail() {
     );
   }
 
-  const patch = (changes: Partial<Product>) =>
+  const patch = (changes: Partial<Draft>) =>
     setDraft(current => (current ? { ...current, ...changes } : current));
 
-  const dirty = JSON.stringify(draft) !== JSON.stringify(product);
-
-  const save = () => {
-    const { id: _id, updatedAt: _updatedAt, ...changes } = draft;
-    updateProduct(product.id, changes);
-    toast.success("상품 초안을 저장했습니다.");
-  };
-
-  const patchStop = (stopId: string, changes: Partial<RouteStop>) =>
-    patch({
-      route: draft.route.map(stop =>
-        stop.id === stopId ? { ...stop, ...changes } : stop
-      ),
-    });
+  const dirty =
+    product.data != null &&
+    JSON.stringify(draft) !== JSON.stringify(toDraft(product.data, regions));
 
   const dropAt = (to: number) => {
     const from = dragFrom.current;
@@ -272,6 +304,33 @@ export default function ProductDetail() {
 
   const problemStops = draft.route.filter(needsAlternative);
 
+  // 추천 목록은 보조 데이터에만 있으므로, 교체할 때 실제 관광지를 찾아
+  // spotId를 받아온다. 그래야 저장이 된다.
+  const replaceStop = async (targetId: string, spotName: string) => {
+    try {
+      const { data } = await placesApi.search(spotName);
+      const found = data.find(place => place.name === spotName) ?? data[0];
+      if (!found) {
+        toast.error(`${spotName}을(를) 관광지 목록에서 찾지 못했습니다.`);
+        return;
+      }
+      const region = regionFromAddress(found.address, regions);
+      patch({
+        route: draft.route.map(item =>
+          item.id === targetId ? stopFromPlace(found, region) : item
+        ),
+      });
+      toast.success(`${found.name}(으)로 교체했습니다.`);
+    } catch {
+      toast.error("관광지를 불러오지 못했습니다.");
+    }
+  };
+
+  const insight =
+    draft.route.length >= 2
+      ? `${draft.route[0].name}에서 ${draft.route[1].name}(으)로 이어지는 일정입니다. 실제 방문 데이터가 쌓이면 이동 흐름 분석이 여기에 표시됩니다.`
+      : "일정을 두 곳 이상 추가하면 이동 흐름을 분석해 드립니다.";
+
   return (
     <PortalChrome title="관광상품 기획" eyebrow="PRODUCT LAB">
       <div className="detail-back">
@@ -280,9 +339,12 @@ export default function ProductDetail() {
           상품 목록으로
         </Link>
         <div>
-          <button onClick={save} disabled={!dirty}>
+          <button
+            onClick={() => save.mutate(draft)}
+            disabled={!dirty || save.isPending}
+          >
             <Save size={14} />
-            {dirty ? "저장" : "저장됨"}
+            {save.isPending ? "저장 중…" : dirty ? "저장" : "저장됨"}
           </button>
           <button
             className="detail-primary"
@@ -360,14 +422,12 @@ export default function ProductDetail() {
                     }}
                     onClick={() => {
                       const region = regionFromAddress(place.address, regions);
+                      const code = regions.find(
+                        item => item.regionName === region
+                      )?.regionId;
                       patch({
                         route: [...draft.route, stopFromPlace(place, region)],
-                        // 새 초안은 지역이 비어 있다. 첫 관광지의 지역을
-                        // 물려받아야 목록 카드와 대체 추천이 제대로 동작한다.
-                        area:
-                          draft.area === UNSET_AREA && region
-                            ? region
-                            : draft.area,
+                        regionId: draft.regionId ?? code ?? null,
                       });
                       setSpotQuery("");
                       setPicking(false);
@@ -418,26 +478,16 @@ export default function ProductDetail() {
                     <MapPin size={16} />
                   </div>
                   <div>
-                    <input
-                      style={stopNameStyle}
-                      value={item.name}
-                      onChange={event =>
-                        patchStop(item.id, { name: event.target.value })
-                      }
-                      placeholder="관광지 이름"
-                    />
-                    <input
-                      style={stopDescStyle}
-                      value={item.desc}
-                      onChange={event =>
-                        patchStop(item.id, { desc: event.target.value })
-                      }
-                      placeholder="설명"
-                    />
+                    <b>{item.name}</b>
+                    <small>{item.desc}</small>
                   </div>
                   <span className="rating">
-                    <Star size={12} />
-                    {item.score}
+                    {item.score !== "-" && (
+                      <>
+                        <Star size={12} />
+                        {item.score}
+                      </>
+                    )}
                   </span>
                   <button
                     onClick={() =>
@@ -466,10 +516,7 @@ export default function ProductDetail() {
                 <span>ROUTE PREVIEW</span>
                 <h3>동선 미리보기</h3>
               </div>
-              <span
-                className="panel-note"
-                style={{ fontSize: 9, color: "#8799a0" }}
-              >
+              <span style={{ fontSize: 9, color: "#8799a0" }}>
                 주황색 = 혼잡 구간
               </span>
             </div>
@@ -525,20 +572,13 @@ export default function ProductDetail() {
             </div>
             <span>AI ROUTE INSIGHT</span>
             <h3>이 조합이 뜨는 이유</h3>
-            <p>{insightText(draft)}</p>
-            <div className="ai-metric">
-              <span>루트 신뢰도</span>
-              <b>
-                {draft.confidence}
-                <span>/100</span>
-              </b>
-            </div>
+            <p>{insight}</p>
             <button
               onClick={() => {
                 patch({
-                  description: `${draft.description}${draft.description ? "\n\n" : ""}${insightText(draft)} (추정치이며 확정된 수치는 아닙니다.)`,
+                  description: `${draft.description}${draft.description ? "\n\n" : ""}${insight}`,
                 });
-                toast.success("추천 문구를 상품 설명에 넣었습니다.");
+                toast.success("문구를 상품 설명에 넣었습니다.");
               }}
             >
               추천 문구 반영 <Check size={14} />
@@ -549,66 +589,67 @@ export default function ProductDetail() {
             <section className="portal-panel detail-info">
               <span>ALTERNATIVE SPOTS</span>
               <h3>대체 관광지 추천</h3>
-              {problemStops.map(stop => (
-                <div key={stop.id} style={{ marginTop: 14 }}>
-                  <p
-                    style={{ color: "#76909d", fontSize: 10, lineHeight: 1.6 }}
-                  >
-                    <TriangleAlert
-                      size={12}
-                      color="#d7903d"
-                      style={{ verticalAlign: "-2px", marginRight: 4 }}
-                    />
-                    <b>{stop.name}</b>
-                    {stop.congestion === "혼잡"
-                      ? "은(는) 혼잡 구간입니다."
-                      : `은(는) 만족도가 ${stop.score}로 낮습니다.`}
-                  </p>
-                  <div
-                    style={{
-                      display: "flex",
-                      flexWrap: "wrap",
-                      gap: 6,
-                      marginTop: 7,
-                    }}
-                  >
-                    {alternatives.slice(0, 3).map(spot => (
-                      <button
-                        key={spot.id}
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          gap: 4,
-                          padding: "6px 8px",
-                          border: "1px dashed #bed4de",
-                          borderRadius: 5,
-                          background: "#fff",
-                          color: "#4e88ac",
-                          fontSize: 9,
-                        }}
-                        onClick={() => {
-                          patch({
-                            route: draft.route.map(item =>
-                              item.id === stop.id ? stopFromSpot(spot.id) : item
-                            ),
-                          });
-                          toast.success(
-                            `${stop.name}을(를) ${spot.name}(으)로 교체했습니다.`
-                          );
-                        }}
-                      >
-                        <RefreshCw size={11} />
-                        {spot.name} {spot.score}
-                      </button>
-                    ))}
-                    {alternatives.length === 0 && (
-                      <small style={{ color: "#9eacb2", fontSize: 9 }}>
-                        이 지역에 추천할 대체 관광지가 없습니다.
-                      </small>
-                    )}
+              {problemStops.map(stop => {
+                const alternatives = suggestAlternatives(
+                  draft.route,
+                  stop.region
+                );
+                return (
+                  <div key={stop.id} style={{ marginTop: 14 }}>
+                    <p
+                      style={{
+                        color: "#76909d",
+                        fontSize: 10,
+                        lineHeight: 1.6,
+                      }}
+                    >
+                      <TriangleAlert
+                        size={12}
+                        color="#d7903d"
+                        style={{ verticalAlign: "-2px", marginRight: 4 }}
+                      />
+                      <b>{stop.name}</b>
+                      {stop.congestion === "혼잡"
+                        ? "은(는) 혼잡 구간입니다."
+                        : "은(는) 만족도가 " + stop.score + "로 낮습니다."}
+                    </p>
+                    <div
+                      style={{
+                        display: "flex",
+                        flexWrap: "wrap",
+                        gap: 6,
+                        marginTop: 7,
+                      }}
+                    >
+                      {alternatives.slice(0, 3).map(spot => (
+                        <button
+                          key={spot.name}
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 4,
+                            padding: "6px 8px",
+                            border: "1px dashed #bed4de",
+                            borderRadius: 5,
+                            background: "#fff",
+                            color: "#4e88ac",
+                            fontSize: 9,
+                          }}
+                          onClick={() => replaceStop(stop.id, spot.name)}
+                        >
+                          <RefreshCw size={11} />
+                          {spot.name} {spot.score}
+                        </button>
+                      ))}
+                      {alternatives.length === 0 && (
+                        <small style={{ color: "#9eacb2", fontSize: 9 }}>
+                          이 지역에 추천할 대체 관광지가 없습니다.
+                        </small>
+                      )}
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </section>
           )}
 
@@ -672,10 +713,10 @@ export default function ProductDetail() {
             </div>
             <div className="info-line">
               <span>
-                <Users size={14} />
-                예상 방문객
+                <MapPin size={14} />
+                일정
               </span>
-              <b>월 {draft.monthlyVisitors.toLocaleString("ko-KR")}명</b>
+              <b>{draft.route.length}곳</b>
             </div>
           </section>
         </aside>
