@@ -25,7 +25,8 @@ import {
   formatPrice,
   needsAlternative,
   productStatuses,
-  spotCatalog,
+  regionFromAddress,
+  stopFromPlace,
   stopFromSpot,
   suggestAlternatives,
   targetOptions,
@@ -35,6 +36,7 @@ import {
   type RouteStop,
 } from "@/lib/productsData";
 import { updateProduct, useProduct } from "@/lib/productsStore";
+import { placesApi, type PlaceSearchResult, type Region } from "@/lib/api";
 
 const fieldStyle = {
   display: "block",
@@ -170,7 +172,36 @@ export default function ProductDetail() {
   const [newTag, setNewTag] = useState("");
   const [spotQuery, setSpotQuery] = useState("");
   const [picking, setPicking] = useState(false);
+  const [regions, setRegions] = useState<Region[]>([]);
+  const [results, setResults] = useState<PlaceSearchResult[]>([]);
+  const [searching, setSearching] = useState(false);
   const dragFrom = useRef<number | null>(null);
+
+  useEffect(() => {
+    placesApi
+      .regions()
+      .then(({ data }) => setRegions(data))
+      .catch(() => setRegions([]));
+  }, []);
+
+  // 타이핑마다 호출하지 않도록 잠깐 기다렸다가 검색한다.
+  useEffect(() => {
+    const query = spotQuery.trim();
+    if (!picking || query.length < 2) {
+      setResults([]);
+      setSearching(false);
+      return;
+    }
+    setSearching(true);
+    const timer = setTimeout(() => {
+      placesApi
+        .search(query)
+        .then(({ data }) => setResults(data))
+        .catch(() => setResults([]))
+        .finally(() => setSearching(false));
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [spotQuery, picking]);
 
   useEffect(() => {
     setDraft(product);
@@ -235,15 +266,8 @@ export default function ProductDetail() {
     setNewTag("");
   };
 
-  const query = spotQuery.trim().toLowerCase();
-  const searchResults = spotCatalog
-    .filter(spot => !draft.route.some(stop => stop.name === spot.name))
-    .filter(
-      spot =>
-        !query ||
-        spot.name.toLowerCase().includes(query) ||
-        spot.region.toLowerCase().includes(query)
-    )
+  const searchResults = results
+    .filter(place => !draft.route.some(stop => stop.spotId === place.spotId))
     .slice(0, 6);
 
   const problemStops = draft.route.filter(needsAlternative);
@@ -321,9 +345,9 @@ export default function ProductDetail() {
                     onChange={event => setSpotQuery(event.target.value)}
                   />
                 </div>
-                {searchResults.map(spot => (
+                {searchResults.map(place => (
                   <button
-                    key={spot.id}
+                    key={place.spotId}
                     style={{
                       width: "100%",
                       display: "flex",
@@ -335,13 +359,15 @@ export default function ProductDetail() {
                       textAlign: "left",
                     }}
                     onClick={() => {
-                      const route = [...draft.route, stopFromSpot(spot.id)];
+                      const region = regionFromAddress(place.address, regions);
                       patch({
-                        route,
+                        route: [...draft.route, stopFromPlace(place, region)],
                         // 새 초안은 지역이 비어 있다. 첫 관광지의 지역을
                         // 물려받아야 목록 카드와 대체 추천이 제대로 동작한다.
                         area:
-                          draft.area === UNSET_AREA ? spot.region : draft.area,
+                          draft.area === UNSET_AREA && region
+                            ? region
+                            : draft.area,
                       });
                       setSpotQuery("");
                       setPicking(false);
@@ -349,14 +375,10 @@ export default function ProductDetail() {
                   >
                     <MapPin size={14} color="#0074CE" />
                     <span style={{ flex: 1, fontSize: 10, color: "#4d6570" }}>
-                      <b>{spot.name}</b>
+                      <b>{place.name}</b>
                       <small style={{ display: "block", color: "#9eacb2" }}>
-                        {spot.region} · {spot.desc}
+                        {place.address}
                       </small>
-                    </span>
-                    <span className="rating">
-                      <Star size={12} />
-                      {spot.score}
                     </span>
                   </button>
                 ))}
@@ -368,7 +390,11 @@ export default function ProductDetail() {
                       padding: "12px 4px",
                     }}
                   >
-                    검색 결과가 없습니다.
+                    {searching
+                      ? "검색 중…"
+                      : spotQuery.trim().length < 2
+                        ? "관광지 이름을 두 글자 이상 입력하세요."
+                        : "검색 결과가 없습니다."}
                   </p>
                 )}
               </div>

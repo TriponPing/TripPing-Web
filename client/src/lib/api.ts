@@ -86,3 +86,40 @@ export const adminApi = {
   review: (orgId: number, status: OrgReviewStatus) =>
     api.patch<OrgSummary>(`/b2b/admin/organizations/${orgId}`, { status }),
 };
+
+// 관광지·지역 조회. 여행객 앱과 공유하는 데이터라 /b2b 아래가 아니고,
+// 로그인 없이도 읽을 수 있다 (PlaceController / RegionController).
+export type PlaceSearchResult = {
+  spotId: number;
+  name: string;
+  category: string;
+  address: string;
+  latitude: number;
+  longitude: number;
+  imageUrl: string | null;
+  description: string | null;
+  popularTimeSlot: string | null;
+  pingCount: number;
+};
+
+// averageRating·reviewCount는 여행객 앱에 후기가 쌓여야 값이 생긴다.
+// 아직 데이터가 없어 null/0으로 내려오므로 호출부에서 없는 경우를 처리해야 한다.
+export type PlaceDetail = PlaceSearchResult & {
+  averageRating: number | null;
+  reviewCount: number;
+};
+
+export type Region = {
+  regionId: string;
+  regionName: string;
+  regionType: string;
+};
+
+export const placesApi = {
+  search: (query: string, regionId?: string) =>
+    api.get<PlaceSearchResult[]>("/places/search", {
+      params: { query, ...(regionId ? { regionId } : {}) },
+    }),
+  detail: (spotId: number) => api.get<PlaceDetail>(`/places/${spotId}/detail`),
+  regions: () => api.get<Region[]>("/regions"),
+};
