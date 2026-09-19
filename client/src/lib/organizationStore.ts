@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import type { OrgMe } from "./api";
 
 const STORAGE_KEY = "tripping.organization";
 
@@ -26,14 +27,13 @@ export type Organization = {
 };
 
 const seed: Organization = {
-  name: "한국관광공사",
-  type: "지자체·공공기관",
-  department: "관광데이터전략팀",
-  email: "tourism@kto.or.kr",
-  description:
-    "실제 여행객의 이동 경로를 기반으로 지역 관광 트렌드를 분석합니다.",
-  contactName: "이지호",
-  contactRole: "관광데이터 분석",
+  name: "",
+  type: "",
+  department: "",
+  email: "",
+  description: "",
+  contactName: "",
+  contactRole: "",
   logo: "",
   notifyTrend: true,
   notifyReport: true,
@@ -61,6 +61,24 @@ function commit(next: Organization) {
   } catch {
     // 저장에 실패해도 화면 상태는 유지한다.
   }
+  listeners.forEach(listener => listener());
+}
+
+// 백엔드 orgType 코드를 화면에서 고르는 값으로 옮긴다.
+function toOrganizationType(orgType: string) {
+  return orgType === "travel_company" ? "여행사·관광기업" : "지자체·공공기관";
+}
+
+// 로그인한 기관 정보로 빈 칸만 채운다. 사용자가 이미 고쳐서 저장한 값은
+// 건드리지 않는다.
+export function hydrateFromAccount(me: OrgMe) {
+  const filled: Partial<Organization> = {};
+  if (!organization.name) filled.name = me.orgName;
+  if (!organization.email) filled.email = me.managerEmail;
+  if (!organization.contactName) filled.contactName = me.managerName;
+  if (!organization.type) filled.type = toOrganizationType(me.orgType);
+  if (Object.keys(filled).length === 0) return;
+  organization = { ...organization, ...filled };
   listeners.forEach(listener => listener());
 }
 

@@ -12,6 +12,7 @@ export type RouteStop = {
   desc: string;
   score: string;
   congestion?: Congestion;
+  region?: string;
 };
 
 export type Spot = {
@@ -164,7 +165,22 @@ export function stopFromSpot(spotId: string): RouteStop {
     desc: spot.desc,
     score: spot.score,
     congestion: spot.congestion,
+    region: spot.region,
   };
+}
+
+// 일정에서 가장 많이 등장하는 지역. 새로 만든 상품은 area가 "지역 미정"이라
+// 상품 정보만으로는 지역을 알 수 없어, 담긴 관광지에서 역산한다.
+export function regionOfRoute(route: RouteStop[]) {
+  const counts: Record<string, number> = {};
+  for (const stop of route) {
+    if (stop.region) counts[stop.region] = (counts[stop.region] ?? 0) + 1;
+  }
+  let best = "";
+  for (const region of Object.keys(counts)) {
+    if (!best || counts[region] > counts[best]) best = region;
+  }
+  return best;
 }
 
 // 만족도가 낮거나 혼잡한 구간을 "대체 관광지 추천" 대상으로 본다.
@@ -174,9 +190,12 @@ export function needsAlternative(stop: RouteStop) {
 
 export function suggestAlternatives(area: string, route: RouteStop[]) {
   const used = new Set(route.map(stop => stop.name));
+  const region = regionOfRoute(route);
+  const matches = (spot: Spot) =>
+    region ? spot.region === region : area.includes(spot.region);
   return spotCatalog.filter(
     spot =>
-      area.includes(spot.region) &&
+      matches(spot) &&
       !used.has(spot.name) &&
       spot.congestion !== "혼잡" &&
       Number(spot.score) >= 4.5
@@ -200,6 +219,8 @@ export type Product = {
   monthlyVisitors: number;
   confidence: number;
 };
+
+export const UNSET_AREA = "지역 미정";
 
 export const durationOptions = ["당일", "1박 2일", "2박 3일"];
 export const targetOptions = ["20–30대 커플", "가족 여행객", "외국인 관광객"];

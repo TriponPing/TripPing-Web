@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import { seedProducts, type Product } from "./productsData";
+import { seedProducts, UNSET_AREA, type Product } from "./productsData";
 
 const STORAGE_KEY = "tripping.products";
 
@@ -47,7 +47,7 @@ export function createProduct() {
     id: `draft-${Date.now()}`,
     title: "새 관광상품 초안",
     status: "초안",
-    area: "지역 미정",
+    area: UNSET_AREA,
     updatedAt: now,
     score: 0,
     color: "blue",
