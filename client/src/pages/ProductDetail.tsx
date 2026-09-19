@@ -29,6 +29,7 @@ import {
   stopFromSpot,
   suggestAlternatives,
   targetOptions,
+  UNSET_AREA,
   type Product,
   type ProductStatus,
   type RouteStop,
@@ -334,7 +335,14 @@ export default function ProductDetail() {
                       textAlign: "left",
                     }}
                     onClick={() => {
-                      patch({ route: [...draft.route, stopFromSpot(spot.id)] });
+                      const route = [...draft.route, stopFromSpot(spot.id)];
+                      patch({
+                        route,
+                        // 새 초안은 지역이 비어 있다. 첫 관광지의 지역을
+                        // 물려받아야 목록 카드와 대체 추천이 제대로 동작한다.
+                        area:
+                          draft.area === UNSET_AREA ? spot.region : draft.area,
+                      });
                       setSpotQuery("");
                       setPicking(false);
                     }}
