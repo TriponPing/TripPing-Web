@@ -12,7 +12,9 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import PortalChrome from "@/components/PortalChrome";
+import { authApi } from "@/lib/api";
 import {
+  hydrateFromAccount,
   issueApiKey,
   organizationTypes,
   revokeApiKey,
@@ -33,6 +35,19 @@ export default function Settings() {
   const logoInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => setForm(organization), [organization]);
+
+  // 조직명·담당자는 로그인한 기관 계정이 이미 갖고 있다. 시드 값을 보여주는
+  // 대신 실제 계정에서 가져온다.
+  useEffect(() => {
+    authApi
+      .me()
+      .then(({ data }) => {
+        if (data.type === "org") hydrateFromAccount(data);
+      })
+      .catch(() => {
+        // 계정 정보를 못 읽으면 저장해둔 값만으로 화면을 유지한다.
+      });
+  }, []);
 
   const patch = (changes: Partial<Organization>) => {
     setForm(current => ({ ...current, ...changes }));
@@ -147,6 +162,7 @@ export default function Settings() {
                 <label>
                   담당 부서
                   <input
+                    placeholder="예: 관광데이터전략팀"
                     value={form.department}
                     onChange={event =>
                       patch({ department: event.target.value })
@@ -164,6 +180,7 @@ export default function Settings() {
                 <label className="full">
                   조직 소개
                   <textarea
+                    placeholder="어떤 일을 하는 기관인지 적어주세요. 보고서에 함께 표시됩니다."
                     value={form.description}
                     onChange={event =>
                       patch({ description: event.target.value })
@@ -186,6 +203,7 @@ export default function Settings() {
               <label>
                 직무
                 <input
+                  placeholder="예: 관광데이터 분석"
                   value={form.contactRole}
                   onChange={event => patch({ contactRole: event.target.value })}
                 />
