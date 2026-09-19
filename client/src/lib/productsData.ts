@@ -1,3 +1,5 @@
+import type { PlaceSearchResult, Region } from "./api";
+
 export const productStatuses = ["초안", "검토 중", "완료", "게시"] as const;
 
 export type ProductStatus = (typeof productStatuses)[number];
@@ -13,6 +15,12 @@ export type RouteStop = {
   score: string;
   congestion?: Congestion;
   region?: string;
+  // 아래는 백엔드 관광지에서 가져온 일정에만 있다. spotId는 나중에 상품을
+  // 저장할 때 tour_product_spot.spot_id로 그대로 넘어간다.
+  spotId?: number;
+  address?: string;
+  latitude?: number;
+  longitude?: number;
 };
 
 export type Spot = {
@@ -167,6 +175,33 @@ export function stopFromSpot(spotId: string): RouteStop {
     congestion: spot.congestion,
     region: spot.region,
   };
+}
+
+// 백엔드 관광지 검색 결과를 일정 항목으로 옮긴다. 후기·혼잡도가 아직
+// 쌓이지 않아 평점 자리는 비워두고, 있는 정보(분류·인기 시간대)로 설명을 만든다.
+export function stopFromPlace(place: PlaceSearchResult, region: string) {
+  const parts = [place.category, place.popularTimeSlot]
+    .filter(part => part && part !== "정보 없음")
+    .join(" · ");
+  const stop: RouteStop = {
+    id: `spot-${place.spotId}-${Math.random().toString(36).slice(2, 7)}`,
+    name: place.name,
+    desc: parts || place.address,
+    score: "-",
+    region,
+    spotId: place.spotId,
+    address: place.address,
+    latitude: place.latitude,
+    longitude: place.longitude,
+  };
+  return stop;
+}
+
+// 주소 앞부분으로 지역을 찾는다. /places/search 응답에는 지역 코드가 없고
+// "부산 해운대구 ..." 처럼 지역명으로 시작하는 주소만 들어 있다.
+export function regionFromAddress(address: string, regions: Region[]) {
+  const hit = regions.find(region => address.startsWith(region.regionName));
+  return hit?.regionName ?? "";
 }
 
 // 일정에서 가장 많이 등장하는 지역. 새로 만든 상품은 area가 "지역 미정"이라
