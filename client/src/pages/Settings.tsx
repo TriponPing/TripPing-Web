@@ -268,14 +268,6 @@ export default function Settings() {
                       saveNotifications.mutate({ notifyReport: value })
                     }
                   />
-                  <ToggleField
-                    label="주간 요약 메일"
-                    hint="매주 월요일 지난주 방문 추이를 메일로 받습니다."
-                    checked={notify.notifyWeekly}
-                    onChange={value =>
-                      saveNotifications.mutate({ notifyWeekly: value })
-                    }
-                  />
                   <p
                     className="full"
                     style={{ color: "#9eacb2", fontSize: 9, marginTop: 4 }}
@@ -390,7 +382,7 @@ export default function Settings() {
                 <b>알림 설정</b>
                 <small>
                   {notify
-                    ? `${[notify.notifyTrend, notify.notifyReport, notify.notifyWeekly].filter(Boolean).length}개 켜짐`
+                    ? `${[notify.notifyTrend, notify.notifyReport].filter(Boolean).length}개 켜짐`
                     : "불러오는 중"}
                 </small>
               </span>

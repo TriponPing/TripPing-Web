@@ -209,7 +209,6 @@ export type OrgProfile = {
 export type NotificationSetting = {
   notifyTrend: boolean;
   notifyReport: boolean;
-  notifyWeekly: boolean;
 };
 
 // plainKey는 발급 응답에만 한 번 담겨 온다. 목록에서는 항상 null이라
