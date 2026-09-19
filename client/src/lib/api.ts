@@ -86,3 +86,28 @@ export const adminApi = {
   review: (orgId: number, status: OrgReviewStatus) =>
     api.patch<OrgSummary>(`/b2b/admin/organizations/${orgId}`, { status }),
 };
+
+export type PopularPlace = {
+  spotId: number;
+  name: string;
+  category: string;
+  address: string;
+  savedCount: number;
+  photoUrl: string | null;
+};
+
+export type TrendingPlace = {
+  spotId: number;
+  name: string;
+  category: string;
+  address: string;
+  imageUrl: string | null;
+  latitude: number;
+  longitude: number;
+  recentVisitCount: number;
+};
+
+export const placesApi = {
+  popular: (limit = 10) => api.get<PopularPlace[]>("/places/popular", { params: { limit } }),
+  trending: (limit: number) => api.get<TrendingPlace[]>("/places/trending", { params: { limit } }),
+};
