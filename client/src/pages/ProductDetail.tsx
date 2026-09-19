@@ -50,6 +50,18 @@ const tagInputStyle = {
   fontSize: 9,
 } as const;
 
+function insightText(product: Product) {
+  const visitors = product.monthlyVisitors.toLocaleString("ko-KR");
+  const [first, second] = product.route;
+  if (!first) {
+    return "일정을 추가하면 실제 이동 데이터를 바탕으로 이 조합의 흐름을 분석해 드립니다.";
+  }
+  if (!second) {
+    return `최근 30일 여행객 ${visitors}명이 ${first.name}을(를) 방문했습니다. 다음 관광지를 추가하면 이동 흐름을 분석할 수 있습니다.`;
+  }
+  return `최근 30일 여행객 ${visitors}명이 선택한 순서입니다. ${first.name}에서 ${second.name}(으)로 이어지는 흐름이 특히 강하게 나타납니다.`;
+}
+
 export default function ProductDetail() {
   const [, params] = useRoute("/products/:id");
   const [, navigate] = useLocation();
@@ -271,11 +283,7 @@ export default function ProductDetail() {
             </div>
             <span>AI ROUTE INSIGHT</span>
             <h3>이 조합이 뜨는 이유</h3>
-            <p>
-              최근 30일 여행객 {draft.monthlyVisitors.toLocaleString("ko-KR")}
-              명이 선택한 순서입니다. 오전 성산일출봉 방문 후 섭지코지로
-              이동하는 흐름이 특히 강하게 나타납니다.
-            </p>
+            <p>{insightText(draft)}</p>
             <div className="ai-metric">
               <span>루트 신뢰도</span>
               <b>
