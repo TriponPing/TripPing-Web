@@ -303,7 +303,6 @@ export default function ProductDetail() {
     .slice(0, 6);
 
   const problemStops = draft.route.filter(needsAlternative);
-  const alternatives = suggestAlternatives(draft.route);
 
   // 추천 목록은 보조 데이터에만 있으므로, 교체할 때 실제 관광지를 찾아
   // spotId를 받아온다. 그래야 저장이 된다.
@@ -590,57 +589,67 @@ export default function ProductDetail() {
             <section className="portal-panel detail-info">
               <span>ALTERNATIVE SPOTS</span>
               <h3>대체 관광지 추천</h3>
-              {problemStops.map(stop => (
-                <div key={stop.id} style={{ marginTop: 14 }}>
-                  <p
-                    style={{ color: "#76909d", fontSize: 10, lineHeight: 1.6 }}
-                  >
-                    <TriangleAlert
-                      size={12}
-                      color="#d7903d"
-                      style={{ verticalAlign: "-2px", marginRight: 4 }}
-                    />
-                    <b>{stop.name}</b>
-                    {stop.congestion === "혼잡"
-                      ? "은(는) 혼잡 구간입니다."
-                      : "은(는) 만족도가 " + stop.score + "로 낮습니다."}
-                  </p>
-                  <div
-                    style={{
-                      display: "flex",
-                      flexWrap: "wrap",
-                      gap: 6,
-                      marginTop: 7,
-                    }}
-                  >
-                    {alternatives.slice(0, 3).map(spot => (
-                      <button
-                        key={spot.name}
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          gap: 4,
-                          padding: "6px 8px",
-                          border: "1px dashed #bed4de",
-                          borderRadius: 5,
-                          background: "#fff",
-                          color: "#4e88ac",
-                          fontSize: 9,
-                        }}
-                        onClick={() => replaceStop(stop.id, spot.name)}
-                      >
-                        <RefreshCw size={11} />
-                        {spot.name} {spot.score}
-                      </button>
-                    ))}
-                    {alternatives.length === 0 && (
-                      <small style={{ color: "#9eacb2", fontSize: 9 }}>
-                        이 지역에 추천할 대체 관광지가 없습니다.
-                      </small>
-                    )}
+              {problemStops.map(stop => {
+                const alternatives = suggestAlternatives(
+                  draft.route,
+                  stop.region
+                );
+                return (
+                  <div key={stop.id} style={{ marginTop: 14 }}>
+                    <p
+                      style={{
+                        color: "#76909d",
+                        fontSize: 10,
+                        lineHeight: 1.6,
+                      }}
+                    >
+                      <TriangleAlert
+                        size={12}
+                        color="#d7903d"
+                        style={{ verticalAlign: "-2px", marginRight: 4 }}
+                      />
+                      <b>{stop.name}</b>
+                      {stop.congestion === "혼잡"
+                        ? "은(는) 혼잡 구간입니다."
+                        : "은(는) 만족도가 " + stop.score + "로 낮습니다."}
+                    </p>
+                    <div
+                      style={{
+                        display: "flex",
+                        flexWrap: "wrap",
+                        gap: 6,
+                        marginTop: 7,
+                      }}
+                    >
+                      {alternatives.slice(0, 3).map(spot => (
+                        <button
+                          key={spot.name}
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 4,
+                            padding: "6px 8px",
+                            border: "1px dashed #bed4de",
+                            borderRadius: 5,
+                            background: "#fff",
+                            color: "#4e88ac",
+                            fontSize: 9,
+                          }}
+                          onClick={() => replaceStop(stop.id, spot.name)}
+                        >
+                          <RefreshCw size={11} />
+                          {spot.name} {spot.score}
+                        </button>
+                      ))}
+                      {alternatives.length === 0 && (
+                        <small style={{ color: "#9eacb2", fontSize: 9 }}>
+                          이 지역에 추천할 대체 관광지가 없습니다.
+                        </small>
+                      )}
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </section>
           )}
 

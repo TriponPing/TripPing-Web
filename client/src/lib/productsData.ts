@@ -121,9 +121,11 @@ export function regionOfRoute(route: RouteStop[]) {
   return best;
 }
 
-export function suggestAlternatives(route: RouteStop[]) {
+// 대체 후보는 교체 대상 구간과 같은 지역에서 고른다. 여러 지역이 섞인
+// 일정에서 일정 전체의 대표 지역을 쓰면 엉뚱한 지역을 추천하게 된다.
+export function suggestAlternatives(route: RouteStop[], forRegion?: string) {
   const used = new Set(route.map(stop => stop.name));
-  const region = regionOfRoute(route);
+  const region = forRegion || regionOfRoute(route);
   if (!region) return [];
   return spotCatalog.filter(
     spot =>
