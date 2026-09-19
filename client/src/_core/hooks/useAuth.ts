@@ -1,5 +1,6 @@
-import { trpc } from "@/lib/trpc";
-import { TRPCClientError } from "@trpc/client";
+import { authApi, type MeResponse } from "@/lib/api";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { AxiosError } from "axios";
 import { useCallback, useEffect, useMemo } from "react";
 
 type UseAuthOptions = {
@@ -7,68 +8,59 @@ type UseAuthOptions = {
   redirectPath?: string;
 };
 
+const AUTH_ME_KEY = ["auth", "me"] as const;
+
 export function useAuth(options?: UseAuthOptions) {
   const { redirectOnUnauthenticated = false, redirectPath = "/login" } = options ?? {};
-  const utils = trpc.useUtils();
+  const queryClient = useQueryClient();
 
-  const meQuery = trpc.auth.me.useQuery(undefined, {
+  const meQuery = useQuery<MeResponse | null>({
+    queryKey: AUTH_ME_KEY,
+    queryFn: async () => {
+      try {
+        const { data } = await authApi.me();
+        return data;
+      } catch (error) {
+        // 401/403 = 로그인 안 된 상태. 에러로 던지지 않고 null 사용자로 처리.
+        if (error instanceof AxiosError && (error.response?.status === 401 || error.response?.status === 403)) {
+          return null;
+        }
+        throw error;
+      }
+    },
     retry: false,
     refetchOnWindowFocus: false,
   });
 
-  const logoutMutation = trpc.auth.logout.useMutation({
-    onSuccess: () => {
-      utils.auth.me.setData(undefined, null);
-    },
-  });
-
   const logout = useCallback(async () => {
     try {
-      await logoutMutation.mutateAsync();
-    } catch (error: unknown) {
-      if (
-        error instanceof TRPCClientError &&
-        error.data?.code === "UNAUTHORIZED"
-      ) {
-        return;
-      }
-      throw error;
+      await authApi.logout();
+    } catch {
+      // 이미 세션이 끊긴 상태여도 로그아웃 처리는 그대로 진행
     } finally {
-      utils.auth.me.setData(undefined, null);
-      await utils.auth.me.invalidate();
+      queryClient.setQueryData(AUTH_ME_KEY, null);
+      await queryClient.invalidateQueries({ queryKey: AUTH_ME_KEY });
     }
-  }, [logoutMutation, utils]);
+  }, [queryClient]);
 
   const state = useMemo(() => {
     return {
       user: meQuery.data ?? null,
-      loading: meQuery.isLoading || logoutMutation.isPending,
-      error: meQuery.error ?? logoutMutation.error ?? null,
+      loading: meQuery.isLoading,
+      error: meQuery.error ?? null,
       isAuthenticated: Boolean(meQuery.data),
     };
-  }, [
-    meQuery.data,
-    meQuery.error,
-    meQuery.isLoading,
-    logoutMutation.error,
-    logoutMutation.isPending,
-  ]);
+  }, [meQuery.data, meQuery.error, meQuery.isLoading]);
 
   useEffect(() => {
     if (!redirectOnUnauthenticated) return;
-    if (meQuery.isLoading || logoutMutation.isPending) return;
+    if (meQuery.isLoading) return;
     if (state.user) return;
     if (typeof window === "undefined") return;
     if (window.location.pathname === redirectPath) return;
 
     window.location.href = redirectPath;
-  }, [
-    redirectOnUnauthenticated,
-    redirectPath,
-    logoutMutation.isPending,
-    meQuery.isLoading,
-    state.user,
-  ]);
+  }, [redirectOnUnauthenticated, redirectPath, meQuery.isLoading, state.user]);
 
   return {
     ...state,

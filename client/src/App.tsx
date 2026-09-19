@@ -16,20 +16,26 @@ import ProductDetail from "./pages/ProductDetail";
 import Reports from "./pages/Reports";
 import Settings from "./pages/Settings";
 import { useAuth } from "@/_core/hooks/useAuth";
-import { trpc } from "@/lib/trpc";
 import { useEffect } from "react";
 
 function Splash() { return <div className="app-splash"><div className="splash-mark"><i /><i /><i /></div><b>trip ping</b><span>INSIGHT PORTAL</span></div>; }
 
 function Entry() { return <Landing />; }
 
+// /b2b/auth/me already tells us everything we need (type + org status), so
+// there's no separate "access status" call anymore like the old trpc version.
 function ApprovedGate({ children }: { children: React.ReactNode }) {
-  const { user, loading } = useAuth(); const [, navigate] = useLocation(); const status = trpc.access.status.useQuery(undefined, { enabled: Boolean(user), retry: false });
-  useEffect(() => { if (loading || status.isLoading) return; if (!user) navigate("/login"); else if (user.role === "admin") navigate("/admin"); else if (status.data?.status === "not_submitted") navigate("/apply"); else if (status.data?.status !== "approved") navigate("/pending"); }, [loading, status.isLoading, user, status.data?.status, navigate]);
-  if (loading || status.isLoading || !user || status.data?.status !== "approved") return <Splash />; return <>{children}</>;
+  const { user, loading } = useAuth(); const [, navigate] = useLocation();
+  useEffect(() => {
+    if (loading) return;
+    if (!user) { navigate("/login"); return; }
+    if (user.type === "admin") { navigate("/admin"); return; }
+    if (user.status !== "APPROVED") navigate("/pending");
+  }, [loading, user, navigate]);
+  if (loading || !user || user.type === "admin" || user.status !== "APPROVED") return <Splash />; return <>{children}</>;
 }
 
-function AdminRoute() { const { user, loading } = useAuth(); const [, navigate] = useLocation(); useEffect(() => { if (!loading && (!user || user.role !== "admin")) navigate("/"); }, [loading, user, navigate]); if (loading || !user || user.role !== "admin") return <Splash />; return <AdminApprovals />; }
+function AdminRoute() { const { user, loading } = useAuth(); const [, navigate] = useLocation(); useEffect(() => { if (!loading && (!user || user.type !== "admin")) navigate("/"); }, [loading, user, navigate]); if (loading || !user || user.type !== "admin") return <Splash />; return <AdminApprovals />; }
 
 function Router() { return <Switch>
   <Route path="/" component={Entry} />
