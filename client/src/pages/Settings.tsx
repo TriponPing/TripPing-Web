@@ -9,7 +9,7 @@ import {
   Trash2,
   UserRound,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import PortalChrome from "@/components/PortalChrome";
 import {
@@ -30,6 +30,7 @@ export default function Settings() {
   const [tab, setTab] = useState<Tab>("조직 정보");
   const [form, setForm] = useState(organization);
   const [saved, setSaved] = useState(false);
+  const logoInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => setForm(organization), [organization]);
 
@@ -42,6 +43,19 @@ export default function Settings() {
     saveOrganization(form);
     setSaved(true);
     toast.success("변경사항을 저장했습니다.");
+  };
+
+  // 로고는 data URL로 브라우저에 저장하므로 용량을 제한한다.
+  const readLogo = (file: File | undefined) => {
+    if (!file) return;
+    if (file.size > 300 * 1024) {
+      toast.error("로고 이미지는 300KB 이하로 올려주세요.");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => patch({ logo: String(reader.result) });
+    reader.onerror = () => toast.error("이미지를 읽지 못했습니다.");
+    reader.readAsDataURL(file);
   };
 
   return (
@@ -78,17 +92,38 @@ export default function Settings() {
             <>
               <div className="settings-avatar">
                 <div>
-                  <Building2 size={23} />
+                  {form.logo ? (
+                    <img
+                      src={form.logo}
+                      alt="기관 로고"
+                      style={{
+                        width: "100%",
+                        height: "100%",
+                        objectFit: "cover",
+                        borderRadius: 10,
+                      }}
+                    />
+                  ) : (
+                    <Building2 size={23} />
+                  )}
                 </div>
                 <span>
                   <b>{form.name || "조직명을 입력하세요"}</b>
                   <small>기관 로고를 등록하면 보고서에 함께 표시됩니다.</small>
                 </span>
-                <button
-                  onClick={() => toast.info("로고 업로드는 준비 중입니다.")}
-                >
-                  로고 변경
+                <input
+                  ref={logoInput}
+                  type="file"
+                  accept="image/png,image/jpeg,image/svg+xml"
+                  hidden
+                  onChange={event => readLogo(event.target.files?.[0])}
+                />
+                <button onClick={() => logoInput.current?.click()}>
+                  {form.logo ? "로고 교체" : "로고 변경"}
                 </button>
+                {form.logo && (
+                  <button onClick={() => patch({ logo: "" })}>삭제</button>
+                )}
               </div>
               <div className="settings-fields">
                 <label>
