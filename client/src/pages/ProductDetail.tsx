@@ -20,6 +20,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation, useRoute } from "wouter";
 import { toast } from "sonner";
 import PortalChrome from "@/components/PortalChrome";
+import ProductRouteMap from "@/components/ProductRouteMap";
 import {
   placesApi,
   productsApi,
@@ -520,7 +521,10 @@ export default function ProductDetail() {
                 주황색 = 혼잡 구간
               </span>
             </div>
-            <RouteLine route={draft.route} />
+            <ProductRouteMap
+              route={draft.route}
+              fallback={<RouteLine route={draft.route} />}
+            />
           </div>
 
           <div className="editor-section">

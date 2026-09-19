@@ -139,6 +139,8 @@ export type ProductSpot = {
   spotId: number;
   name: string | null;
   address: string | null;
+  latitude: number | null;
+  longitude: number | null;
   visitOrder: number;
   stayDuration: number | null;
 };

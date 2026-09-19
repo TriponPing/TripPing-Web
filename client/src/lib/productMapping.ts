@@ -71,6 +71,8 @@ export function toRouteStops(
         (spot.address ? regionFromAddress(spot.address, regions) : undefined),
       spotId: spot.spotId,
       address: spot.address ?? undefined,
+      latitude: spot.latitude ?? undefined,
+      longitude: spot.longitude ?? undefined,
     };
   });
 }
