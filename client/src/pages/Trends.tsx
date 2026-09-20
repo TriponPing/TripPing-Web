@@ -1,6 +1,7 @@
 import { ArrowDownRight, ArrowUpRight, Download, Filter, Loader2, MapPin, Route, TrendingUp, Users } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useLocation } from "wouter";
 import { toast } from "sonner";
 import type { DateRange } from "react-day-picker";
 import {
@@ -17,6 +18,7 @@ import DateRangePicker from "@/components/DateRangePicker";
 import { ChartContainer, ChartTooltip } from "@/components/ui/chart";
 import { insightApi, placesApi, type DailyVisit, type RegionalVisitor } from "@/lib/api";
 import { ALL_REGIONS_LABEL, insightPeriods, type InsightPeriod } from "@/lib/dashboardData";
+import { createDraftFromRoute } from "@/lib/productDraft";
 
 // "2026-08-01" -> "8/1"
 function formatMonthDay(isoDate: string) {
@@ -151,6 +153,7 @@ export default function Trends() {
   const [period, setPeriod] = useState<InsightPeriod>("최근 30일");
   const [region, setRegion] = useState<string>(ALL_REGIONS_LABEL);
   const [range, setRange] = useState<DateRange>(() => rangeForPeriod("최근 30일", todayDate));
+  const [, navigate] = useLocation();
 
   const startDate = range.from ? toIsoDate(range.from) : undefined;
   const endDate = range.to ? toIsoDate(range.to) : startDate;
@@ -209,6 +212,25 @@ export default function Trends() {
   // 관광공사 API는 최초 조회 시 1년치를 페이지네이션으로 받아와 몇 초 걸린다.
   // 아무것도 못 그리는 동안에는 빈 차트 대신 진행 중임을 알려준다.
   const isChartLoading = dailyQuery.isLoading || regionalQuery.isLoading;
+
+  // 발견한 루트를 그대로 상품 초안으로 옮기고 상세 화면으로 보낸다.
+  const [creatingDraft, setCreatingDraft] = useState(false);
+
+  async function createDraft() {
+    if (!topRoute || creatingDraft) return;
+    setCreatingDraft(true);
+    try {
+      // 백엔드는 지역을 regionId로 받는데 화면은 regionName으로 고르므로 여기서 맞춰준다.
+      const regionId = regionsQuery.data?.find((r) => r.regionName === region)?.regionId;
+      const productId = await createDraftFromRoute(topRoute, regionId);
+      toast.success("상품 초안을 만들었어요.");
+      navigate(`/products/${productId}`);
+    } catch {
+      toast.error("상품 초안을 만들지 못했습니다. 잠시 후 다시 시도해주세요.");
+    } finally {
+      setCreatingDraft(false);
+    }
+  }
 
   const labelIndexes =
     chartData.length <= 7
@@ -502,8 +524,8 @@ export default function Trends() {
             <p className="insight-empty">아직 이 지역·기간에는 주목할 만한 변화 데이터가 없어요.</p>
           )}
           {topRoute && (
-            <button onClick={() => toast.success("상품 기획 초안을 만들 준비가 되었습니다.")}>
-              이 루트로 상품 초안 만들기 <ArrowUpRight size={15} />
+            <button onClick={createDraft} disabled={creatingDraft}>
+              {creatingDraft ? "초안 만드는 중..." : "이 루트로 상품 초안 만들기"} <ArrowUpRight size={15} />
             </button>
           )}
         </section>

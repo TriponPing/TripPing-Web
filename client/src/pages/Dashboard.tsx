@@ -23,6 +23,7 @@ import {
   X,
 } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useLocation } from "wouter";
 import { toast } from "sonner";
 import {
   Bar,
@@ -45,6 +46,7 @@ import {
   type RouteNetwork,
 } from "@/lib/api";
 import { ALL_REGIONS_LABEL, insightPeriods, type InsightPeriod } from "@/lib/dashboardData";
+import { createDraftFromRoute } from "@/lib/productDraft";
 
 // 지역별 인기 행의 점 색상. 순위 순서대로 돌려쓴다(데이터가 아니라 표현용).
 const REGION_TONES = ["#9ee36f", "#69d6c0", "#7fb7ff", "#f6bd68", "#c9a7f5"];
@@ -330,6 +332,7 @@ export default function Dashboard() {
   const [region, setRegion] = useState(ALL_REGIONS_LABEL);
   const [reportReady, setReportReady] = useState(false);
   const queryClient = useQueryClient();
+  const [, navigate] = useLocation();
 
   const range = useMemo(() => rangeForPeriod(period, todayDate), [period, todayDate.getTime()]);
 
@@ -381,6 +384,25 @@ export default function Dashboard() {
 
   // 관광공사 API는 최초 조회 시 1년치를 페이지네이션으로 받아와 몇 초 걸린다.
   const isChartLoading = dailyQuery.isLoading || regionalQuery.isLoading;
+
+  // 발견한 루트를 그대로 상품 초안으로 옮기고 상세 화면으로 보낸다.
+  const [creatingDraft, setCreatingDraft] = useState(false);
+
+  async function createDraft() {
+    if (!topRoute || creatingDraft) return;
+    setCreatingDraft(true);
+    try {
+      // 백엔드는 지역을 regionId로 받는데 화면은 regionName으로 고르므로 여기서 맞춰준다.
+      const regionId = regionsQuery.data?.find((r) => r.regionName === region)?.regionId;
+      const productId = await createDraftFromRoute(topRoute, regionId);
+      toast.success("상품 초안을 만들었어요.");
+      navigate(`/products/${productId}`);
+    } catch {
+      toast.error("상품 초안을 만들지 못했습니다. 잠시 후 다시 시도해주세요.");
+    } finally {
+      setCreatingDraft(false);
+    }
+  }
   const topRoute = routesQuery.data?.[0];
   const regionRanks = regionRankQuery.data ?? [];
 
@@ -570,7 +592,9 @@ export default function Dashboard() {
             </div>
             <span className="summary-note">이전 기간 대비</span>
           </div>
-          <div className="chart-area" style={{ height: 240 }}>
+          {/* .chart-area는 옛 막대 레이아웃용 CSS Grid(32px 1fr / 132px 17px)라
+              차트를 유일한 자식으로 넣으면 첫 칸(32px)에 갇힌다. 전용 컨테이너를 쓴다. */}
+          <div style={{ position: "relative", height: 240, marginTop: 13, padding: "0 2px 4px" }}>
             {chartData.length === 0 && isChartLoading && (
               <div className="chart-loading">
                 <Loader2 size={18} className="spin" />
@@ -790,8 +814,8 @@ export default function Dashboard() {
                 {topRoute.routeName} 조합이<br />
                 이전 기간 대비 {signed(topRoute.changeRate)} 변화했어요.
               </p>
-              <button className="dark-button" onClick={() => toast.success("상품 설계 화면을 열었습니다.")}>
-                상품 초안 만들기 <ArrowUpRight size={16} />
+              <button className="dark-button" onClick={createDraft} disabled={creatingDraft}>
+                {creatingDraft ? "초안 만드는 중..." : "상품 초안 만들기"} <ArrowUpRight size={16} />
               </button>
               <div className="opportunity-meta">
                 <span><MapPin size={14} />{region}</span>
