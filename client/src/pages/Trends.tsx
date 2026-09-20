@@ -1,11 +1,21 @@
 import { ArrowDownRight, ArrowUpRight, Download, Filter, MapPin, Route, Sparkles, TrendingUp } from "lucide-react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import type { DateRange } from "react-day-picker";
+import {
+  Bar,
+  CartesianGrid,
+  ComposedChart,
+  Line,
+  XAxis,
+  YAxis,
+  type TooltipProps,
+} from "recharts";
 import PortalChrome from "@/components/PortalChrome";
 import DateRangePicker from "@/components/DateRangePicker";
-import { insightApi, placesApi } from "@/lib/api";
+import { ChartContainer, ChartTooltip } from "@/components/ui/chart";
+import { insightApi, placesApi, type DailyVisit, type RegionalVisitor } from "@/lib/api";
 import { ALL_REGIONS_LABEL, insightPeriods, type InsightPeriod } from "@/lib/dashboardData";
 
 // "2026-08-01" -> "8/1"
@@ -23,6 +33,12 @@ function fmtDot(date: Date) {
   return `${date.getFullYear()}.${String(date.getMonth() + 1).padStart(2, "0")}.${String(date.getDate()).padStart(2, "0")}`;
 }
 
+// 큰 숫자를 "92만명" 같은 형태로 축약 (KPI 보조 정보, Y축 눈금용).
+function formatManUnit(value: number) {
+  if (value >= 10000) return `${Math.round(value / 10000).toLocaleString()}만`;
+  return value.toLocaleString();
+}
+
 // 기간 pill(최근 7일/30일/1년)을 누르면 그에 맞는 날짜 범위를 계산해서 달력에도 반영한다.
 function rangeForPeriod(period: InsightPeriod, end: Date): DateRange {
   const start = new Date(end);
@@ -30,6 +46,83 @@ function rangeForPeriod(period: InsightPeriod, end: Date): DateRange {
   else if (period === "최근 1년") start.setFullYear(end.getFullYear() - 1, end.getMonth(), end.getDate() + 1);
   else start.setDate(end.getDate() - 29);
   return { from: start, to: end };
+}
+
+// 차트 한 점. 막대(자체 방문 핑)와 선(관광공사 지역 이동량, 실측/추정 두 시리즈로 분리)을
+// 같은 date 기준으로 병합한 것. 두 API 응답 모두 요청 구간의 모든 날짜를 빠짐없이 포함해서
+// 오므로 date로 zip하면 된다.
+type ChartPoint = {
+  date: string;
+  visitCount: number;
+  totalVisitors: number | null;
+  isEstimated: boolean | null;
+  actualVisitors: number | null;
+  estimatedVisitors: number | null;
+};
+
+function buildChartData(daily: DailyVisit[], regional: RegionalVisitor[]): ChartPoint[] {
+  const visitByDate = new Map(daily.map((d) => [d.date, d.visitCount]));
+  const regionalByDate = new Map(regional.map((d) => [d.date, d]));
+
+  // 두 API의 날짜를 합집합으로 모은다. 자체 방문 핑이 아직 하나도 없는 지역이라
+  // daily가 비어 있거나 구간이 어긋나도 관광공사 이동량 선은 그대로 그려져야 하기 때문.
+  const allDates = Array.from(new Set([...visitByDate.keys(), ...regionalByDate.keys()])).sort();
+
+  const points: ChartPoint[] = allDates.map((date) => {
+    const r = regionalByDate.get(date);
+    return {
+      date,
+      visitCount: visitByDate.get(date) ?? 0,
+      totalVisitors: r ? r.totalVisitors : null,
+      isEstimated: r ? r.isEstimated : null,
+      actualVisitors: null,
+      estimatedVisitors: null,
+    };
+  });
+
+  points.forEach((point, i) => {
+    if (point.totalVisitors === null) return;
+    if (point.isEstimated) point.estimatedVisitors = point.totalVisitors;
+    else point.actualVisitors = point.totalVisitors;
+
+    // 경계 날짜: 직전 포인트와 실측/추정 여부가 다르면, 두 선(실선/점선)이 이 지점에서
+    // 맞닿아 보이도록 이번 포인트에 두 시리즈 값을 모두 겹쳐서 채워준다.
+    const prev = points[i - 1];
+    if (prev && prev.totalVisitors !== null && prev.isEstimated !== point.isEstimated) {
+      if (point.isEstimated) point.actualVisitors = point.totalVisitors;
+      else point.estimatedVisitors = point.totalVisitors;
+    }
+  });
+
+  return points;
+}
+
+function TrendChartTooltip({ active, payload, label }: TooltipProps<number, string>) {
+  if (!active || !payload?.length) return null;
+
+  const dailyPoint = payload.find((p) => p.dataKey === "visitCount");
+  const regionalPoint = payload.find(
+    (p) => (p.dataKey === "actualVisitors" || p.dataKey === "estimatedVisitors") && typeof p.value === "number"
+  );
+
+  return (
+    <div className="trend-tooltip">
+      <b>{label}</b>
+      <div>
+        <span>Trip Ping 방문 핑</span>
+        <strong>{(Number(dailyPoint?.value) || 0).toLocaleString()}건</strong>
+      </div>
+      {regionalPoint && (
+        <div>
+          <span>지역 이동량</span>
+          <strong>
+            {Number(regionalPoint.value).toLocaleString()}명
+            {regionalPoint.dataKey === "estimatedVisitors" ? " (추정)" : ""}
+          </strong>
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default function Trends() {
@@ -74,26 +167,30 @@ export default function Trends() {
   const totalVisits = summaryQuery.data ? summaryQuery.data.totalVisits.toLocaleString() : "—";
   const changeRate = summaryQuery.data ? summaryQuery.data.changeRate : null;
   const routeTones = ["blue", "mint", "orange"] as const;
+  const topRoute = routesQuery.data?.[0];
 
   const dailyData = dailyQuery.data ?? [];
-  const maxDailyVisits = Math.max(1, ...dailyData.map((d) => d.visitCount));
-  const highlightCount = Math.min(7, dailyData.length);
-  const highlightStartIndex = dailyData.length - highlightCount;
+  const regionalData = regionalQuery.data ?? [];
+  // "전체 지역"이거나 관광공사 지역코드 매핑이 없는 지역이면 백엔드가 빈 배열을 준다 —
+  // 이때만 선을 숨기고 기존처럼 막대만 보여준다.
+  const hasRegionalSeries = regionalData.length > 0;
+  const regionalTotal = regionalData.reduce((sum, d) => sum + d.totalVisitors, 0);
+
+  const chartData = useMemo(() => buildChartData(dailyData, regionalData), [dailyData, regionalData]);
+
   const labelIndexes =
-    dailyData.length <= 7
-      ? dailyData.map((_, i) => i)
+    chartData.length <= 7
+      ? chartData.map((_, i) => i)
       : Array.from(
           new Set([
             0,
-            Math.round((dailyData.length - 1) * 0.25),
-            Math.round((dailyData.length - 1) * 0.5),
-            Math.round((dailyData.length - 1) * 0.75),
-            dailyData.length - 1,
+            Math.round((chartData.length - 1) * 0.25),
+            Math.round((chartData.length - 1) * 0.5),
+            Math.round((chartData.length - 1) * 0.75),
+            chartData.length - 1,
           ])
         );
-
-  const regionalTotal = (regionalQuery.data ?? []).reduce((sum, d) => sum + d.totalVisitors, 0);
-  const hasRegionalContext = region !== ALL_REGIONS_LABEL && regionalTotal > 0;
+  const xAxisTicks = labelIndexes.map((i) => chartData[i]?.date).filter((d): d is string => Boolean(d));
 
   function csvField(value: string | number) {
     const s = String(value);
@@ -195,6 +292,9 @@ export default function Trends() {
             {changeRate !== null && (changeRate >= 0 ? <ArrowUpRight size={13} /> : <ArrowDownRight size={13} />)}
             {changeRate !== null ? `${Math.abs(changeRate).toFixed(1)}% 이전 기간 대비` : "불러오는 중..."}
           </small>
+          {summaryQuery.data?.totalVisits === 0 && hasRegionalSeries && regionalTotal > 0 && (
+            <small className="trend-kpi-sub">지역 전체 이동량 {formatManUnit(regionalTotal)}명 (관광공사)</small>
+          )}
         </div>
         <div className="trend-kpi">
           <span>
@@ -235,52 +335,99 @@ export default function Trends() {
               <span>ROUTE MOMENTUM</span>
               <h2>지역별 이동량 변화</h2>
             </div>
-            <span className="panel-note">단위: 방문 핑</span>
+            <span className="panel-note">막대: 방문 핑(건) · 선: 이동량(명)</span>
           </div>
           <div className="large-chart">
-            <div className="chart-lines">
-              <i />
-              <i />
-              <i />
-              <i />
-            </div>
-            <div className="chart-bars">
-              {dailyData.map((d, i) => (
-                <div
-                  key={d.date}
-                  style={{ height: `${Math.max(4, (d.visitCount / maxDailyVisits) * 100)}%` }}
-                  className={i >= highlightStartIndex ? "active" : ""}
-                  title={`${d.date} · 방문 핑 ${d.visitCount}건`}
+            <ChartContainer config={{}} className="aspect-auto h-full w-full">
+              <ComposedChart data={chartData} margin={{ top: 6, right: hasRegionalSeries ? 4 : 12, left: 0, bottom: 0 }}>
+                <CartesianGrid vertical={false} stroke="#e6edef" strokeDasharray="3 3" />
+                <XAxis
+                  dataKey="date"
+                  ticks={xAxisTicks}
+                  tickFormatter={formatMonthDay}
+                  tickLine={false}
+                  axisLine={false}
+                  tick={{ fontSize: 9, fill: "#a9b5ba" }}
                 />
-              ))}
-            </div>
-            <div className="chart-labels">
-              {labelIndexes.map((i) => (
-                <span key={i}>{formatMonthDay(dailyData[i].date)}</span>
-              ))}
-            </div>
+                <YAxis
+                  yAxisId="left"
+                  tickLine={false}
+                  axisLine={false}
+                  width={28}
+                  tick={{ fontSize: 9, fill: "#a9b5ba" }}
+                  allowDecimals={false}
+                />
+                {hasRegionalSeries && (
+                  <YAxis
+                    yAxisId="right"
+                    orientation="right"
+                    tickLine={false}
+                    axisLine={false}
+                    width={34}
+                    tick={{ fontSize: 9, fill: "#a9b5ba" }}
+                    tickFormatter={formatManUnit}
+                  />
+                )}
+                <ChartTooltip content={<TrendChartTooltip />} />
+                <Bar
+                  yAxisId="left"
+                  dataKey="visitCount"
+                  name="Trip Ping 방문 핑"
+                  fill="#5db4e9"
+                  radius={[3, 3, 0, 0]}
+                  maxBarSize={18}
+                />
+                {/* Recharts는 자식 중 Bar/Line 같은 "아는 타입"만 골라내는데, 프래그먼트(<>)로
+                    감싸면 그 안을 들여다보지 않고 통째로 무시한다. 그래서 두 Line은 반드시
+                    ComposedChart의 직계 자식이어야 한다. 묶지 말 것. */}
+                {hasRegionalSeries && (
+                  <Line
+                    yAxisId="right"
+                    type="monotone"
+                    dataKey="actualVisitors"
+                    name="지역 이동량 (관광공사 통계)"
+                    stroke="#5b6b74"
+                    strokeWidth={1.75}
+                    dot={false}
+                    connectNulls={false}
+                    isAnimationActive={false}
+                  />
+                )}
+                {hasRegionalSeries && (
+                  <Line
+                    yAxisId="right"
+                    type="monotone"
+                    dataKey="estimatedVisitors"
+                    name="지역 이동량 (추정)"
+                    stroke="#5b6b74"
+                    strokeWidth={1.75}
+                    strokeDasharray="5 4"
+                    dot={false}
+                    connectNulls={false}
+                    isAnimationActive={false}
+                    legendType="none"
+                  />
+                )}
+              </ComposedChart>
+            </ChartContainer>
           </div>
           <div className="chart-legend">
             <span>
               <i className="blue-dot" />
-              최근 {highlightCount || 7}일
+              Trip Ping 방문 핑
             </span>
-            <span>
-              <i className="gray-dot" />
-              이전 날짜
-            </span>
-            <b>
-              {hasRegionalContext ? (
-                <>
-                  <TrendingUp size={13} /> {region} 전체 방문자 {regionalTotal.toLocaleString()}명 · 관광공사 통계({period})
-                </>
-              ) : (
-                <>
-                  <TrendingUp size={13} /> 주말에 제주 동부 방문이 집중돼요
-                </>
-              )}
-            </b>
+            {hasRegionalSeries && (
+              <span>
+                <i className="line-dot" />
+                지역 이동량 (관광공사 통계)
+              </span>
+            )}
           </div>
+          {hasRegionalSeries && (
+            <p className="chart-footnote">
+              지역 이동량은 한국관광공사 통계 기준이며, 최근 구간은 작년 동기 데이터로 추정한 값입니다.
+            </p>
+          )}
         </section>
         <section className="portal-panel insight-panel">
           <div className="panel-title">
@@ -293,14 +440,23 @@ export default function Trends() {
             <div>
               <TrendingUp size={19} />
             </div>
-            <b>{routesQuery.data?.[0]?.routeName ?? "데이터 없음"}</b>
+            <b>{topRoute?.routeName ?? "데이터 없음"}</b>
             <span>선택 기간 방문량</span>
-            <strong>{routesQuery.data?.[0] ? `${routesQuery.data[0].changeRate >= 0 ? "+" : ""}${routesQuery.data[0].changeRate.toFixed(1)}%` : "—"}</strong>
+            <strong>{topRoute ? `${topRoute.changeRate >= 0 ? "+" : ""}${topRoute.changeRate.toFixed(1)}%` : "—"}</strong>
           </div>
-          <p>성산일출봉 이후 섭지코지로 이어지는 이동이 빠르게 늘고 있어요. 기존 동선에 우도를 결합한 1박 2일 상품을 검토해보세요.</p>
-          <button onClick={() => toast.success("상품 기획 초안을 만들 준비가 되었습니다.")}>
-            이 루트로 상품 초안 만들기 <ArrowUpRight size={15} />
-          </button>
+          {topRoute ? (
+            <p>
+              {topRoute.routeName} 루트 방문이 이전 기간 대비 {topRoute.changeRate >= 0 ? "+" : ""}
+              {topRoute.changeRate.toFixed(1)}% {topRoute.changeRate >= 0 ? "늘고" : "줄고"} 있어요. 관련 상품 구성을 검토해보세요.
+            </p>
+          ) : (
+            <p className="insight-empty">아직 이 지역·기간에는 주목할 만한 변화 데이터가 없어요.</p>
+          )}
+          {topRoute && (
+            <button onClick={() => toast.success("상품 기획 초안을 만들 준비가 되었습니다.")}>
+              이 루트로 상품 초안 만들기 <ArrowUpRight size={15} />
+            </button>
+          )}
         </section>
       </div>
 
@@ -317,7 +473,13 @@ export default function Trends() {
         <div className="trend-table">
           {routesQuery.isLoading && <p className="trend-table-empty">불러오는 중...</p>}
           {routesQuery.isError && <p className="trend-table-empty">급상승 루트를 불러오지 못했습니다.</p>}
-          {routesQuery.data?.length === 0 && <p className="trend-table-empty">선택한 기간·지역에 급상승 루트가 없습니다.</p>}
+          {routesQuery.data?.length === 0 && (
+            <p className="trend-table-empty">
+              아직 이 지역에 Trip Ping 데이터가 쌓이지 않았어요.
+              <br />
+              위 차트의 지역 이동량 추세를 참고해 주세요.
+            </p>
+          )}
           {routesQuery.data?.map((row, i) => (
             <div className="trend-row" key={row.routeName}>
               <span className="trend-rank">0{i + 1}</span>

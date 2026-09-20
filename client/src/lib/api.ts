@@ -229,6 +229,7 @@ export type DailyVisit = {
 export type RegionalVisitor = {
   date: string;
   totalVisitors: number;
+  isEstimated: boolean; // true면 작년 동기 데이터 기반 추정치, false면 실측치.
 };
 
 export type ReportStatus = "COMPLETED" | "IN_PROGRESS";
