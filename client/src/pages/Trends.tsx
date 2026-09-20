@@ -3,8 +3,23 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import PortalChrome from "@/components/PortalChrome";
-import { insightApi, placesApi } from "@/lib/api";
+import { insightApi, placesApi, type DailyVisit } from "@/lib/api";
 import { ALL_REGIONS_LABEL, insightPeriods, type InsightPeriod } from "@/lib/dashboardData";
+
+// "2026-08-01" -> "8/1"
+function formatMonthDay(isoDate: string) {
+  const [, month, day] = isoDate.split("-");
+  return `${Number(month)}/${Number(day)}`;
+}
+
+// dailyQuery 결과의 첫/마지막 날짜로 툴바 날짜 표시를 만든다 ("2026.08.01 — 08.31").
+// 예전엔 이 라벨이 고정 문자열이라 기간을 "최근 7일"로 바꿔도 안 바뀌는 문제가 있었음.
+function formatRangeLabel(daily: DailyVisit[]) {
+  if (daily.length === 0) return "불러오는 중...";
+  const [startY, startM, startD] = daily[0].date.split("-");
+  const [, endM, endD] = daily[daily.length - 1].date.split("-");
+  return `${startY}.${startM}.${startD} — ${endM}.${endD}`;
+}
 
 export default function Trends() {
   const [period, setPeriod] = useState<InsightPeriod>("최근 30일");
@@ -28,9 +43,34 @@ export default function Trends() {
     queryFn: () => insightApi.risingRoutes(period, region).then((res) => res.data),
   });
 
+  // 일자별 이동량(막대그래프) - summary의 "총 방문 핑"과 같은 집계를 날짜별로 쪼갠 것.
+  const dailyQuery = useQuery({
+    queryKey: ["insight", "trends-daily", period, region],
+    queryFn: () => insightApi.dailyVisits(period, region).then((res) => res.data),
+  });
+
   const totalVisits = summaryQuery.data ? summaryQuery.data.totalVisits.toLocaleString() : "—";
   const changeRate = summaryQuery.data ? summaryQuery.data.changeRate : null;
   const routeTones = ["blue", "mint", "orange"] as const;
+
+  const dailyData = dailyQuery.data ?? [];
+  const maxDailyVisits = Math.max(1, ...dailyData.map((d) => d.visitCount));
+  // "최근 N일" 구간 중 마지막 7일(또는 구간 전체가 7일 이하면 전체)을 파란색으로 강조.
+  const highlightCount = Math.min(7, dailyData.length);
+  const highlightStartIndex = dailyData.length - highlightCount;
+  // 날짜가 많을 때(최근 30일/1년)는 x축에 5개 지점만 골라서 보여준다.
+  const labelIndexes =
+    dailyData.length <= 7
+      ? dailyData.map((_, i) => i)
+      : Array.from(
+          new Set([
+            0,
+            Math.round((dailyData.length - 1) * 0.25),
+            Math.round((dailyData.length - 1) * 0.5),
+            Math.round((dailyData.length - 1) * 0.75),
+            dailyData.length - 1,
+          ])
+        );
 
   return (
     <PortalChrome title="트렌드 분석" eyebrow="TOURISM TREND INTELLIGENCE">
@@ -56,7 +96,7 @@ export default function Trends() {
           </label>
           <label>
             <CalendarDays size={14} />
-            2026.08.01 — 08.31
+            {formatRangeLabel(dailyData)}
           </label>
           <button onClick={() => toast.success("트렌드 분석 리포트를 다운로드했습니다.")}>
             <Download size={14} />
@@ -76,7 +116,7 @@ export default function Trends() {
             {changeRate !== null ? `${Math.abs(changeRate).toFixed(1)}% 이전 기간 대비` : "불러오는 중..."}
           </small>
         </div>
-        {/* 아래 3개 KPI는 아직 대응하는 백엔드 API가 없어 임시 고정값으로 남겨둠 */}
+        {/* 아래 2개 KPI는 아직 대응하는 백엔드 API가 없어 임시 고정값으로 남겨둠 */}
         <div className="trend-kpi">
           <span>
             <TrendingUp size={16} />급상승 루트
@@ -110,7 +150,6 @@ export default function Trends() {
       </div>
 
       <div className="trend-layout">
-        {/* 일자별 이동량 차트는 아직 대응하는 백엔드 API가 없어 임시 목데이터로 남겨둠 */}
         <section className="portal-panel large">
           <div className="panel-title">
             <div>
@@ -127,25 +166,31 @@ export default function Trends() {
               <i />
             </div>
             <div className="chart-bars">
-              {[38, 45, 41, 56, 52, 65, 61, 73, 68, 80, 78, 87, 84, 95, 91, 100, 94, 97, 89, 96, 100, 92, 98, 94, 100, 97].map((n, i) => (
-                <div key={i} style={{ height: `${n}%` }} className={i > 17 ? "active" : ""} />
+              {dailyData.map((d, i) => (
+                <div
+                  key={d.date}
+                  style={{ height: `${Math.max(4, (d.visitCount / maxDailyVisits) * 100)}%` }}
+                  className={i >= highlightStartIndex ? "active" : ""}
+                  title={`${d.date} · 방문 핑 ${d.visitCount}건`}
+                />
               ))}
             </div>
             <div className="chart-labels">
-              <span>8/1</span>
-              <span>8/8</span>
-              <span>8/15</span>
-              <span>8/22</span>
-              <span>8/31</span>
+              {labelIndexes.map((i) => (
+                <span key={i}>{formatMonthDay(dailyData[i].date)}</span>
+              ))}
             </div>
           </div>
           <div className="chart-legend">
             <span>
-              <i className="blue-dot" />전체 이동량
+              <i className="blue-dot" />
+              최근 {highlightCount || 7}일
             </span>
             <span>
-              <i className="gray-dot" />이전 기간 평균
+              <i className="gray-dot" />
+              이전 날짜
             </span>
+            {/* 아래 문구는 아직 실데이터 기반 자동생성이 아니라 고정 예시 문구임 */}
             <b>
               <TrendingUp size={13} /> 주말에 제주 동부 방문이 집중돼요
             </b>

@@ -250,6 +250,13 @@ export type RouteRanking = {
   changeRate: number;
 };
 
+// 일자별 이동량(방문 핑) 추이. date는 LocalDate가 JSON으로 내려온 "2026-08-01" 형식 문자열.
+// 선택한 기간 안의 모든 날짜가 다 들어있다 - 방문 기록이 없는 날짜도 visitCount: 0으로 채워져서 온다.
+export type DailyVisit = {
+  date: string;
+  visitCount: number;
+};
+
 export type ReportStatus = "COMPLETED" | "IN_PROGRESS";
 
 export type ReportSummary = {
@@ -279,6 +286,8 @@ export const insightApi = {
     api.get<TrendsSummary>("/b2b/insight/trends/summary", { params: { period, region } }),
   risingRoutes: (period: string, region: string) =>
     api.get<RouteRanking[]>("/b2b/insight/trends/routes", { params: { period, region } }),
+  dailyVisits: (period: string, region: string) =>
+    api.get<DailyVisit[]>("/b2b/insight/trends/daily", { params: { period, region } }),
   reports: () => api.get<ReportSummary[]>("/b2b/insight/reports"),
   createReport: (data: ReportCreateRequest) =>
     api.post<ReportDetail>("/b2b/insight/reports", data),
