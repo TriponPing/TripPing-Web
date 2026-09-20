@@ -28,6 +28,7 @@ import {
   type ProductDetail as ProductDetailDto,
   type Region,
   type SpotSearchResult,
+  type AlternativeSpot,
 } from "@/lib/api";
 import {
   durationLabel,
@@ -38,13 +39,14 @@ import {
   toSpotPayload,
 } from "@/lib/productMapping";
 import {
+  categoryLabel,
   durationOptions,
   formatPrice,
   productStatuses,
   regionFromAddress,
+  spotCategories,
   stopFromPlace,
   needsAlternative,
-  suggestAlternatives,
   targetOptions,
   type ProductStatus,
   type RouteStop,
@@ -182,6 +184,12 @@ export default function ProductDetail() {
   const [results, setResults] = useState<SpotSearchResult[]>([]);
   const [adding, setAdding] = useState<string | null>(null);
   const [searching, setSearching] = useState(false);
+  // 대체 관광지 추천: 구간별로 고른 카테고리와 그 결과를 따로 들고 있는다.
+  const [altCategory, setAltCategory] = useState<Record<string, string>>({});
+  const [altResults, setAltResults] = useState<Record<string, AlternativeSpot[]>>(
+    {}
+  );
+  const [altLoading, setAltLoading] = useState<string | null>(null);
   const dragFrom = useRef<number | null>(null);
 
   const product = useQuery({
@@ -310,7 +318,9 @@ export default function ProductDetail() {
     )
     .slice(0, 8);
 
-  const problemStops = draft.route.filter(needsAlternative);
+  // 교체는 등록된 관광지(spotId가 있는 구간)에서만 할 수 있다. 주변을 찾으려면
+  // 기준 좌표가 필요한데, 좌표는 등록된 관광지에만 붙어 있다.
+  const swappableStops = draft.route.filter(stop => stop.spotId != null);
 
   // 일정은 spotId로 저장되므로, 아직 등록되지 않은 관광공사 후보는 먼저
   // 등록해서 spotId를 받아야 한다.
@@ -344,27 +354,54 @@ export default function ProductDetail() {
     }
   };
 
-  // 추천 목록은 보조 데이터에만 있으므로, 교체할 때 실제 관광지를 찾아
-  // spotId를 받아온다. 그래야 저장이 된다.
-  const replaceStop = async (targetId: string, spotName: string) => {
+  // 담당자가 카테고리를 고르면 그 구간 주변에서 같은 분류의 관광지를 받아온다.
+  const loadAlternatives = async (stop: RouteStop, code: string) => {
+    if (stop.spotId == null) return;
+    setAltCategory(prev => ({ ...prev, [stop.id]: code }));
+    setAltLoading(stop.id);
     try {
-      const { data } = await spotsApi.search(spotName);
-      const found = data.find(place => place.name === spotName) ?? data[0];
-      const ready = found ? await ensureRegistered(found) : null;
-      if (!ready?.spotId) {
-        toast.error(`${spotName}을(를) 관광지 목록에서 찾지 못했습니다.`);
-        return;
-      }
-      const region = regionFromAddress(ready.address ?? "", regions);
-      patch({
-        route: draft.route.map(item =>
-          item.id === targetId ? stopFromPlace(ready, region) : item
-        ),
-      });
-      toast.success(`${ready.name}(으)로 교체했습니다.`);
+      const { data } = await spotsApi.alternatives(stop.spotId, code);
+      // 이미 일정에 있는 곳은 후보에서 뺀다.
+      const used = new Set(
+        draft.route.map(item => item.spotId).filter(id => id != null)
+      );
+      setAltResults(prev => ({
+        ...prev,
+        [stop.id]: data.filter(spot => !used.has(spot.spotId)),
+      }));
     } catch {
-      toast.error("관광지를 불러오지 못했습니다.");
+      toast.error("주변 관광지를 불러오지 못했습니다.");
+      setAltResults(prev => ({ ...prev, [stop.id]: [] }));
+    } finally {
+      setAltLoading(null);
     }
+  };
+
+  // 추천 결과는 이미 등록된 관광지라 spotId가 있다. 등록 절차 없이 바로 넣는다.
+  const replaceStop = (targetId: string, spot: AlternativeSpot) => {
+    const region = regionFromAddress(spot.address ?? "", regions);
+    patch({
+      route: draft.route.map(item =>
+        item.id === targetId
+          ? stopFromPlace(
+              {
+                spotId: spot.spotId,
+                contentId: null,
+                name: spot.name,
+                address: spot.address,
+                category: spot.category,
+                latitude: spot.latitude,
+                longitude: spot.longitude,
+                imageUrl: spot.imageUrl,
+                registered: true,
+              },
+              region
+            )
+          : item
+      ),
+    });
+    setAltResults(prev => ({ ...prev, [targetId]: [] }));
+    toast.success(`${spot.name}(으)로 교체했습니다.`);
   };
 
   const insight =
@@ -630,34 +667,58 @@ export default function ProductDetail() {
             </button>
           </section>
 
-          {problemStops.length > 0 && (
+          {swappableStops.length > 0 && (
             <section className="portal-panel detail-info">
               <span>ALTERNATIVE SPOTS</span>
               <h3>대체 관광지 추천</h3>
-              {problemStops.map(stop => {
-                const alternatives = suggestAlternatives(
-                  draft.route,
-                  stop.region
-                );
+              <p style={{ color: "#9eacb2", fontSize: 9, marginTop: 4 }}>
+                분류를 고르면 해당 구간 주변에서 같은 분류의 장소를 찾아
+                방문자 수와 평점 순으로 보여드립니다.
+              </p>
+              {swappableStops.map(stop => {
+                const picked = altCategory[stop.id];
+                const found = altResults[stop.id];
                 return (
                   <div key={stop.id} style={{ marginTop: 14 }}>
                     <p
-                      style={{
-                        color: "#76909d",
-                        fontSize: 10,
-                        lineHeight: 1.6,
-                      }}
+                      style={{ color: "#76909d", fontSize: 10, lineHeight: 1.6 }}
                     >
-                      <TriangleAlert
-                        size={12}
-                        color="#d7903d"
-                        style={{ verticalAlign: "-2px", marginRight: 4 }}
-                      />
+                      {needsAlternative(stop) && (
+                        <TriangleAlert
+                          size={12}
+                          color="#d7903d"
+                          style={{ verticalAlign: "-2px", marginRight: 4 }}
+                        />
+                      )}
                       <b>{stop.name}</b>
-                      {stop.congestion === "혼잡"
-                        ? "은(는) 혼잡 구간입니다."
-                        : "은(는) 만족도가 " + stop.score + "로 낮습니다."}
+                      {needsAlternative(stop)
+                        ? stop.congestion === "혼잡"
+                          ? " · 혼잡 구간입니다."
+                          : ` · 만족도가 ${stop.score}로 낮습니다.`
+                        : " 주변에서 찾기"}
                     </p>
+                    <div style={{ display: "flex", gap: 5, marginTop: 6 }}>
+                      {spotCategories.map(category => (
+                        <button
+                          key={category.code}
+                          style={{
+                            padding: "5px 9px",
+                            border: "1px solid",
+                            borderColor:
+                              picked === category.code ? "#4e88ac" : "#dfe9ed",
+                            borderRadius: 5,
+                            background:
+                              picked === category.code ? "#eef5f9" : "#fff",
+                            color:
+                              picked === category.code ? "#33607d" : "#76909d",
+                            fontSize: 9,
+                          }}
+                          onClick={() => loadAlternatives(stop, category.code)}
+                        >
+                          {category.label}
+                        </button>
+                      ))}
+                    </div>
                     <div
                       style={{
                         display: "flex",
@@ -666,29 +727,43 @@ export default function ProductDetail() {
                         marginTop: 7,
                       }}
                     >
-                      {alternatives.slice(0, 3).map(spot => (
-                        <button
-                          key={spot.name}
-                          style={{
-                            display: "flex",
-                            alignItems: "center",
-                            gap: 4,
-                            padding: "6px 8px",
-                            border: "1px dashed #bed4de",
-                            borderRadius: 5,
-                            background: "#fff",
-                            color: "#4e88ac",
-                            fontSize: 9,
-                          }}
-                          onClick={() => replaceStop(stop.id, spot.name)}
-                        >
-                          <RefreshCw size={11} />
-                          {spot.name} {spot.score}
-                        </button>
-                      ))}
-                      {alternatives.length === 0 && (
+                      {altLoading === stop.id && (
                         <small style={{ color: "#9eacb2", fontSize: 9 }}>
-                          이 지역에 추천할 대체 관광지가 없습니다.
+                          찾는 중…
+                        </small>
+                      )}
+                      {altLoading !== stop.id &&
+                        found?.map(spot => (
+                          <button
+                            key={spot.spotId}
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 4,
+                              padding: "6px 8px",
+                              border: "1px dashed #bed4de",
+                              borderRadius: 5,
+                              background: "#fff",
+                              color: "#4e88ac",
+                              fontSize: 9,
+                            }}
+                            onClick={() => replaceStop(stop.id, spot)}
+                          >
+                            <RefreshCw size={11} />
+                            {spot.name}
+                            <span style={{ color: "#9eacb2" }}>
+                              {spot.distanceKm}km
+                              {spot.averageRating != null &&
+                                ` · ${spot.averageRating.toFixed(1)}`}
+                              {spot.visitCount > 0 &&
+                                ` · 방문 ${spot.visitCount}`}
+                            </span>
+                          </button>
+                        ))}
+                      {altLoading !== stop.id && found?.length === 0 && (
+                        <small style={{ color: "#9eacb2", fontSize: 9 }}>
+                          주변 30km 안에 등록된 {categoryLabel(picked)}이(가)
+                          없습니다.
                         </small>
                       )}
                     </div>
