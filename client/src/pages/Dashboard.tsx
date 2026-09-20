@@ -10,7 +10,7 @@ import {
   FileText,
   Filter,
   Layers3,
-  Map,
+  Map as MapIcon,
   MapPin,
   MoreHorizontal,
   RefreshCw,
@@ -20,79 +20,426 @@ import {
   TrendingUp,
   Users,
   X,
-  Zap,
 } from "lucide-react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import {
+  Bar,
+  CartesianGrid,
+  ComposedChart,
+  Line,
+  XAxis,
+  YAxis,
+  type TooltipProps,
+} from "recharts";
 import PortalChrome from "@/components/PortalChrome";
-import { buildReportText, dashboardPeriods, totalForPeriod, type DashboardPeriod } from "@/lib/dashboardData";
+import { ChartContainer, ChartTooltip } from "@/components/ui/chart";
+import {
+  authApi,
+  insightApi,
+  placesApi,
+  type DailyVisit,
+  type RegionalVisitor,
+  type RouteNetwork,
+} from "@/lib/api";
+import { ALL_REGIONS_LABEL, insightPeriods, type InsightPeriod } from "@/lib/dashboardData";
 
-const regions = [
-  { name: "제주특별자치도", value: "24,820", change: "+18.4%", tone: "up", color: "#9ee36f" },
-  { name: "서울특별시", value: "18,410", change: "+12.1%", tone: "up", color: "#69d6c0" },
-  { name: "부산광역시", value: "13,970", change: "+8.7%", tone: "up", color: "#7fb7ff" },
-  { name: "강원특별자치도", value: "11,860", change: "-2.4%", tone: "down", color: "#f6bd68" },
-];
+// 지역별 인기 행의 점 색상. 순위 순서대로 돌려쓴다(데이터가 아니라 표현용).
+const REGION_TONES = ["#9ee36f", "#69d6c0", "#7fb7ff", "#f6bd68", "#c9a7f5"];
 
-const routes = [
-  { rank: "01", route: "성산일출봉 → 섭지코지 → 우도", meta: "제주 동부 · 평균 1.8일", count: "1,284회", delta: "+24.8%", color: "#9ee36f" },
-  { rank: "02", route: "해운대 → 광안리 → 감천문화마을", meta: "부산 · 평균 1.2일", count: "964회", delta: "+18.2%", color: "#69d6c0" },
-  { rank: "03", route: "북촌한옥마을 → 서촌 → 익선동", meta: "서울 종로 · 평균 0.8일", count: "788회", delta: "+11.6%", color: "#7fb7ff" },
-];
+// "2026-08-01" -> "8/1"
+function formatMonthDay(isoDate: string) {
+  const [, month, day] = isoDate.split("-");
+  return `${Number(month)}/${Number(day)}`;
+}
 
-const bars = [38, 44, 42, 57, 49, 63, 68, 60, 72, 66, 78, 84, 76, 89, 92, 86, 100, 93, 96, 88, 91, 97, 84, 90];
+function fmtDot(date: Date) {
+  return `${date.getFullYear()}.${String(date.getMonth() + 1).padStart(2, "0")}.${String(date.getDate()).padStart(2, "0")}`;
+}
 
-function MetricCard({ icon, label, value, change, note, accent }: { icon: React.ReactNode; label: string; value: string; change: string; note: string; accent: string }) {
+function toIsoDate(date: Date) {
+  const offset = date.getTimezoneOffset();
+  return new Date(date.getTime() - offset * 60000).toISOString().slice(0, 10);
+}
+
+// 큰 숫자를 "92만" 같은 형태로 축약.
+function formatManUnit(value: number) {
+  if (value >= 10000) return `${Math.round(value / 10000).toLocaleString()}만`;
+  return value.toLocaleString();
+}
+
+function signed(value: number) {
+  return `${value >= 0 ? "+" : ""}${value.toFixed(1)}%`;
+}
+
+// 기간 pill을 실제 날짜 구간으로. 백엔드 DateRange.forPeriod()와 같은 규칙이라
+// 화면에 표시되는 구간과 서버가 집계하는 구간이 항상 일치한다.
+function rangeForPeriod(period: InsightPeriod, end: Date) {
+  const start = new Date(end);
+  if (period === "최근 7일") start.setDate(end.getDate() - 6);
+  else if (period === "최근 1년") start.setFullYear(end.getFullYear() - 1, end.getMonth(), end.getDate() + 1);
+  else start.setDate(end.getDate() - 29);
+  return { from: start, to: end };
+}
+
+type ChartPoint = {
+  date: string;
+  visitCount: number;
+  totalVisitors: number | null;
+  isEstimated: boolean | null;
+  actualVisitors: number | null;
+  estimatedVisitors: number | null;
+};
+
+// 트렌드 화면과 같은 병합 규칙 — 두 API 날짜의 합집합으로 돌려서, 자체 방문 핑이
+// 없는 지역이어도 관광공사 이동량 선은 그대로 그려지게 한다.
+function buildChartData(daily: DailyVisit[], regional: RegionalVisitor[]): ChartPoint[] {
+  const visitByDate: Record<string, number> = {};
+  daily.forEach((d) => {
+    visitByDate[d.date] = d.visitCount;
+  });
+  const regionalByDate: Record<string, RegionalVisitor> = {};
+  regional.forEach((d) => {
+    regionalByDate[d.date] = d;
+  });
+
+  // 두 API 날짜의 합집합. 자체 방문 핑이 아직 하나도 없는 지역이라 daily가 비어 있거나
+  // 구간이 어긋나도 관광공사 이동량 선은 그대로 그려져야 하기 때문에 합집합으로 돈다.
+  // (Set/Map 이터레이터 전개는 tsconfig target 때문에 쓸 수 없어 객체로 중복 제거한다.)
+  const seen: Record<string, true> = {};
+  const allDates: string[] = [];
+  daily.forEach((d) => {
+    if (!seen[d.date]) {
+      seen[d.date] = true;
+      allDates.push(d.date);
+    }
+  });
+  regional.forEach((d) => {
+    if (!seen[d.date]) {
+      seen[d.date] = true;
+      allDates.push(d.date);
+    }
+  });
+  allDates.sort();
+
+  const points: ChartPoint[] = allDates.map((date) => {
+    const r = regionalByDate[date];
+    return {
+      date,
+      visitCount: visitByDate[date] ?? 0,
+      totalVisitors: r ? r.totalVisitors : null,
+      isEstimated: r ? r.isEstimated : null,
+      actualVisitors: null,
+      estimatedVisitors: null,
+    };
+  });
+
+  points.forEach((point, i) => {
+    if (point.totalVisitors === null) return;
+    if (point.isEstimated) point.estimatedVisitors = point.totalVisitors;
+    else point.actualVisitors = point.totalVisitors;
+
+    // 경계 날짜에서 실선/점선이 맞닿아 보이도록 두 시리즈 값을 한 점 겹쳐준다.
+    const prev = points[i - 1];
+    if (prev && prev.totalVisitors !== null && prev.isEstimated !== point.isEstimated) {
+      if (point.isEstimated) point.actualVisitors = point.totalVisitors;
+      else point.estimatedVisitors = point.totalVisitors;
+    }
+  });
+
+  return points;
+}
+
+function DashboardTooltip({ active, payload, label }: TooltipProps<number, string>) {
+  if (!active || !payload?.length) return null;
+  const dailyPoint = payload.find((p) => p.dataKey === "visitCount");
+  const regionalPoint = payload.find(
+    (p) => (p.dataKey === "actualVisitors" || p.dataKey === "estimatedVisitors") && typeof p.value === "number"
+  );
+
   return (
-    <div className="metric-card" style={{ "--metric-accent": accent } as React.CSSProperties}>
-      <div className="metric-top"><span className="metric-icon">{icon}</span><span className="metric-label">{label}</span><MoreHorizontal size={17} className="muted" /></div>
-      <div className="metric-value">{value}</div>
-      <div className="metric-bottom"><span className="change"><ArrowUpRight size={14} />{change}</span><span>{note}</span></div>
+    <div className="trend-tooltip">
+      <b>{label}</b>
+      <div>
+        <span>Trip Ping 방문 핑</span>
+        <strong>{(Number(dailyPoint?.value) || 0).toLocaleString()}건</strong>
+      </div>
+      {regionalPoint && (
+        <div>
+          <span>지역 이동량</span>
+          <strong>
+            {Number(regionalPoint.value).toLocaleString()}명
+            {regionalPoint.dataKey === "estimatedVisitors" ? " (추정)" : ""}
+          </strong>
+        </div>
+      )}
     </div>
   );
 }
 
-function TinySparkline({ color = "#9ee36f" }: { color?: string }) {
-  return <svg className="sparkline" viewBox="0 0 112 36" preserveAspectRatio="none" aria-hidden="true"><path d="M1 30 C10 29, 12 20, 20 24 S32 28, 39 18 S50 26, 58 20 S72 8, 80 14 S92 19, 99 8 S106 12,111 2" fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" /></svg>;
+function MetricCard({
+  icon,
+  label,
+  value,
+  change,
+  note,
+  accent,
+  sub,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: string;
+  change: number | null;
+  note: string;
+  accent: string;
+  sub?: string;
+}) {
+  return (
+    <div className="metric-card" style={{ "--metric-accent": accent } as React.CSSProperties}>
+      <div className="metric-top">
+        <span className="metric-icon">{icon}</span>
+        <span className="metric-label">{label}</span>
+        <MoreHorizontal size={17} className="muted" />
+      </div>
+      <div className="metric-value">{value}</div>
+      <div className="metric-bottom">
+        {change !== null ? (
+          <span className="change">
+            {change >= 0 ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}
+            {Math.abs(change).toFixed(1)}%
+          </span>
+        ) : (
+          <span className="change">—</span>
+        )}
+        <span>{sub ?? note}</span>
+      </div>
+    </div>
+  );
 }
 
-function RouteMap() {
+// 실제 방문 기록의 위경도를 지도 박스 안의 % 좌표로 투영한다.
+// 노드가 하나뿐이거나 모두 같은 자리면 범위가 0이 되므로 가운데로 보낸다.
+function projectNodes(nodes: RouteNetwork["nodes"]) {
+  if (nodes.length === 0) return [];
+  const lats = nodes.map((n) => n.latitude);
+  const lngs = nodes.map((n) => n.longitude);
+  const minLat = Math.min(...lats);
+  const maxLat = Math.max(...lats);
+  const minLng = Math.min(...lngs);
+  const maxLng = Math.max(...lngs);
+  const latSpan = maxLat - minLat;
+  const lngSpan = maxLng - minLng;
+  const maxVisits = Math.max(...nodes.map((n) => n.visitCount), 1);
+
+  return nodes.map((node) => ({
+    ...node,
+    // 위도가 클수록 북쪽이라 위로 가야 해서 뒤집는다.
+    top: latSpan === 0 ? 50 : 88 - ((node.latitude - minLat) / latSpan) * 76,
+    left: lngSpan === 0 ? 50 : 8 + ((node.longitude - minLng) / lngSpan) * 76,
+    weightRatio: node.visitCount / maxVisits,
+  }));
+}
+
+function RouteMap({ network, isLoading }: { network: RouteNetwork | undefined; isLoading: boolean }) {
+  const placed = useMemo(() => projectNodes(network?.nodes ?? []), [network]);
+  const positionById = useMemo(() => {
+    const byId: Record<number, (typeof placed)[number]> = {};
+    placed.forEach((n) => {
+      byId[n.spotId] = n;
+    });
+    return byId;
+  }, [placed]);
+  const maxEdgeWeight = Math.max(...(network?.edges ?? []).map((e) => e.weight), 1);
+
+  if (isLoading) {
+    return <div className="route-map"><div className="map-grid" /><p className="map-empty">불러오는 중...</p></div>;
+  }
+
+  if (placed.length === 0) {
+    return (
+      <div className="route-map">
+        <div className="map-grid" />
+        <p className="map-empty">
+          아직 이 기간·지역에 기록된 이동 경로가 없어요.
+          <br />
+          여행객이 관광지에 핑을 남기면 실제 이동 흐름이 여기에 그려집니다.
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className="route-map" aria-label="관광지 이동 흐름 지도">
       <div className="map-grid" />
-      <div className="map-water" />
-      <svg className="map-lines" viewBox="0 0 620 350" preserveAspectRatio="none">
-        <path d="M78 260 C122 217, 165 230, 192 172 S280 120, 317 161 S382 236, 430 184 S507 115, 564 136" className="route route-muted" />
-        <path d="M102 297 C155 260, 184 246, 217 202 S273 172, 314 161 S374 131, 417 98 S489 74, 548 88" className="route route-blue" />
-        <path d="M122 235 C161 201, 210 207, 242 166 S318 134, 350 118 S433 125, 462 165 S510 221, 578 211" className="route route-green" />
-        <path d="M70 130 C143 121, 189 105, 238 122 S313 205, 361 220 S439 232, 509 272" className="route route-orange" />
+      <svg className="map-lines" viewBox="0 0 100 100" preserveAspectRatio="none">
+        {(network?.edges ?? []).map((edge) => {
+          const from = positionById[edge.fromSpotId];
+          const to = positionById[edge.toSpotId];
+          if (!from || !to) return null;
+          return (
+            <line
+              key={`${edge.fromSpotId}-${edge.toSpotId}`}
+              x1={from.left}
+              y1={from.top}
+              x2={to.left}
+              y2={to.top}
+              stroke="#5db4e9"
+              strokeOpacity={0.25 + (edge.weight / maxEdgeWeight) * 0.5}
+              strokeWidth={0.4 + (edge.weight / maxEdgeWeight) * 1.1}
+              strokeLinecap="round"
+              vectorEffect="non-scaling-stroke"
+            />
+          );
+        })}
       </svg>
-      <div className="map-node n1"><span>성산일출봉</span><b>1,284</b></div>
-      <div className="map-node n2"><span>섭지코지</span><b>964</b></div>
-      <div className="map-node n3"><span>우도</span><b>752</b></div>
-      <div className="map-node n4"><span>함덕해수욕장</span><b>618</b></div>
-      <div className="map-node n5"><span>제주공항</span><b>488</b></div>
-      <div className="map-label jeju">JEJU</div>
-      <div className="map-control"><Layers3 size={15} /> 관광지</div>
-      <div className="map-legend"><span><i className="legend-dot green" /> 인기 루트</span><span><i className="legend-dot blue" /> 신규 흐름</span><span><i className="legend-dot orange" /> 주의 구간</span></div>
+      {placed.map((node) => (
+        <div
+          className="map-node"
+          key={node.spotId}
+          style={{ left: `${node.left}%`, top: `${node.top}%` }}
+          title={`${node.name} · 방문 핑 ${node.visitCount.toLocaleString()}건`}
+        >
+          <span>{node.name}</span>
+          <b>{node.visitCount.toLocaleString()}</b>
+        </div>
+      ))}
+      <div className="map-control"><Layers3 size={15} /> 관광지 {placed.length}곳</div>
+      <div className="map-legend">
+        <span><i className="legend-dot blue" /> 실제 이동 경로</span>
+        <span>선이 굵을수록 자주 이어진 구간</span>
+      </div>
     </div>
   );
 }
 
 export default function Dashboard() {
-  const [period, setPeriod] = useState<DashboardPeriod>("이번 달");
+  const todayDate = new Date();
+  const [period, setPeriod] = useState<InsightPeriod>("최근 30일");
   const [filterOpen, setFilterOpen] = useState(false);
-  const [region, setRegion] = useState("전체 지역");
+  const [region, setRegion] = useState(ALL_REGIONS_LABEL);
   const [reportReady, setReportReady] = useState(false);
+  const queryClient = useQueryClient();
 
-  const chartTotal = useMemo(() => totalForPeriod(period), [period]);
+  const range = useMemo(() => rangeForPeriod(period, todayDate), [period, todayDate.getTime()]);
+
+  const meQuery = useQuery({
+    queryKey: ["auth", "me"],
+    queryFn: () => authApi.me().then((res) => res.data),
+  });
+
+  const regionsQuery = useQuery({
+    queryKey: ["regions"],
+    queryFn: () => placesApi.regions().then((res) => res.data),
+  });
+
+  const summaryQuery = useQuery({
+    queryKey: ["dashboard", "summary", period, region],
+    queryFn: () => insightApi.dashboardSummary(period, region).then((res) => res.data),
+  });
+
+  const dailyQuery = useQuery({
+    queryKey: ["insight", "trends-daily", period, region],
+    queryFn: () => insightApi.dailyVisits(period, region).then((res) => res.data),
+  });
+
+  const regionalQuery = useQuery({
+    queryKey: ["insight", "trends-regional-visitors", period, region],
+    queryFn: () => insightApi.regionalVisitors(period, region).then((res) => res.data),
+  });
+
+  const regionRankQuery = useQuery({
+    queryKey: ["dashboard", "regions", period],
+    queryFn: () => insightApi.dashboardRegions(period).then((res) => res.data),
+  });
+
+  const routesQuery = useQuery({
+    queryKey: ["insight", "trends-routes", region, period],
+    queryFn: () => insightApi.risingRoutes(period, region).then((res) => res.data),
+  });
+
+  const networkQuery = useQuery({
+    queryKey: ["dashboard", "network", period, region],
+    queryFn: () => insightApi.dashboardNetwork(period, region).then((res) => res.data),
+  });
+
+  const summary = summaryQuery.data;
+  const dailyData = dailyQuery.data ?? [];
+  const regionalData = regionalQuery.data ?? [];
+  const hasRegionalSeries = regionalData.length > 0;
+  const chartData = useMemo(() => buildChartData(dailyData, regionalData), [dailyData, regionalData]);
+  const topRoute = routesQuery.data?.[0];
+  const regionRanks = regionRankQuery.data ?? [];
+
+  const managerName = meQuery.data && meQuery.data.type === "org" ? meQuery.data.managerName : null;
+
+  const xAxisTicks = useMemo(() => {
+    if (chartData.length === 0) return [];
+    const indexes =
+      chartData.length <= 7
+        ? chartData.map((_, i) => i)
+        : Array.from(
+            new Set([
+              0,
+              Math.round((chartData.length - 1) * 0.25),
+              Math.round((chartData.length - 1) * 0.5),
+              Math.round((chartData.length - 1) * 0.75),
+              chartData.length - 1,
+            ])
+          );
+    return indexes.map((i) => chartData[i]?.date).filter((d): d is string => Boolean(d));
+  }, [chartData]);
+
+  function refresh() {
+    queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+    queryClient.invalidateQueries({ queryKey: ["insight"] });
+    toast.success("데이터를 다시 불러왔습니다.");
+  }
 
   function downloadReport() {
-    const content = buildReportText(period, region);
-    const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+    if (!summary) {
+      toast.error("데이터를 아직 불러오는 중입니다. 잠시 후 다시 시도해주세요.");
+      return;
+    }
+    const lines = [
+      "Trip Ping Insight Report",
+      `생성일시: ${fmtDot(new Date())}`,
+      `기간: ${period} (${fmtDot(range.from)} ~ ${fmtDot(range.to)})`,
+      `지역: ${region}`,
+      "",
+      "[ 요약 지표 ]",
+      `총 방문 핑: ${summary.totalVisits.toLocaleString()}건 (${signed(summary.changeRate)})`,
+      `활성 여행객: ${summary.activeTravelers.toLocaleString()}명 (${signed(summary.travelerChangeRate)})`,
+      `기록된 루트: ${summary.routeCount.toLocaleString()}건 (${signed(summary.routeChangeRate)})`,
+      `여행당 평균 방문 관광지: ${summary.avgSpotsPerRoute.toFixed(1)}곳`,
+      summary.averageRating === null
+        ? "평균 만족도: 평점 기록 없음"
+        : `평균 만족도: ${summary.averageRating.toFixed(2)} (평점 ${summary.ratingCount.toLocaleString()}건)`,
+      "",
+      "[ 지역별 인기 · 관광공사 방문자수 기준 ]",
+      ...(regionRanks.length === 0
+        ? ["데이터 없음"]
+        : regionRanks
+            .slice(0, 10)
+            .map(
+              (r, i) =>
+                `${i + 1}위 ${r.regionName} · 지역 이동량 ${r.regionVisitors === null ? "—" : `${r.regionVisitors.toLocaleString()}명`} · 자체 방문 핑 ${r.visitPings.toLocaleString()}건`
+            )),
+      "",
+      "[ 인기 관광지 조합 ]",
+      ...(routesQuery.data && routesQuery.data.length > 0
+        ? routesQuery.data
+            .slice(0, 5)
+            .map((r, i) => `${i + 1}위 ${r.routeName} · ${r.visitCount.toLocaleString()}회 (${signed(r.changeRate)})`)
+        : ["아직 이 기간·지역에 기록된 루트 조합이 없습니다."]),
+      "",
+      "총 방문 핑은 여행 기록에 남은 관광지 체크인 건수이며,",
+      "지역 이동량은 한국관광공사 DataLab 기준 통계입니다.",
+    ];
+    const blob = new Blob(["﻿" + lines.join("\n")], { type: "text/plain;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
-    anchor.download = `trip-ping-report-${period}.txt`;
+    anchor.download = `trip-ping-report-${toIsoDate(range.from)}_${toIsoDate(range.to)}.txt`;
     anchor.click();
     URL.revokeObjectURL(url);
     setReportReady(true);
@@ -101,21 +448,353 @@ export default function Dashboard() {
 
   return (
     <PortalChrome title="대시보드" eyebrow="LIVE TOURISM INTELLIGENCE">
-      <div className="page-heading"><div><div className="eyebrow"><Activity size={14} />LIVE TOURISM INTELLIGENCE</div><h1>안녕하세요, 지훈님 <span>👋</span></h1><p>실제 여행객의 움직임에서 다음 관광 기회를 발견하세요.</p></div><div className="heading-actions"><button className="ghost-button" onClick={() => toast.success("데이터를 최신 상태로 동기화했습니다.")}><RefreshCw size={16} />마지막 업데이트 3분 전</button><button className="primary-button" onClick={downloadReport}><Download size={16} />리포트 다운로드</button></div></div>
+      <div className="page-heading">
+        <div>
+          <div className="eyebrow"><Activity size={14} />LIVE TOURISM INTELLIGENCE</div>
+          <h1>안녕하세요{managerName ? `, ${managerName}님` : ""} <span>👋</span></h1>
+          <p>실제 여행객의 움직임에서 다음 관광 기회를 발견하세요.</p>
+        </div>
+        <div className="heading-actions">
+          <button className="ghost-button" onClick={refresh}><RefreshCw size={16} />새로고침</button>
+          <button className="primary-button" onClick={downloadReport}><Download size={16} />리포트 다운로드</button>
+        </div>
+      </div>
 
-      <div className="toolbar"><div className="period-tabs">{dashboardPeriods.map((item) => <button key={item} className={period === item ? "selected" : ""} onClick={() => setPeriod(item)}>{item}</button>)}</div><div className="toolbar-right"><div className="filter-wrap"><button className="filter-button" onClick={() => setFilterOpen(!filterOpen)}><Filter size={15} />{region}<ChevronDown size={14} /></button>{filterOpen && <div className="filter-menu">{["전체 지역", "제주특별자치도", "서울특별시", "부산광역시"].map((item) => <button key={item} onClick={() => { setRegion(item); setFilterOpen(false); }}>{item}</button>)}</div>}</div><button className="date-button"><CalendarDays size={15} />2026. 08. 01 — 08. 31</button></div></div>
+      <div className="toolbar">
+        <div className="period-tabs">
+          {insightPeriods.map((item) => (
+            <button key={item} className={period === item ? "selected" : ""} onClick={() => setPeriod(item)}>
+              {item}
+            </button>
+          ))}
+        </div>
+        <div className="toolbar-right">
+          <div className="filter-wrap">
+            <button className="filter-button" onClick={() => setFilterOpen(!filterOpen)}>
+              <Filter size={15} />{region}<ChevronDown size={14} />
+            </button>
+            {filterOpen && (
+              <div className="filter-menu">
+                <button onClick={() => { setRegion(ALL_REGIONS_LABEL); setFilterOpen(false); }}>{ALL_REGIONS_LABEL}</button>
+                {regionsQuery.data?.map((item) => (
+                  <button key={item.regionId} onClick={() => { setRegion(item.regionName); setFilterOpen(false); }}>
+                    {item.regionName}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <button className="date-button"><CalendarDays size={15} />{fmtDot(range.from)} — {fmtDot(range.to)}</button>
+        </div>
+      </div>
 
-      <div className="metrics-grid"><MetricCard icon={<MapPin size={17} />} label="총 방문 핑" value={chartTotal} change="18.4%" note="전월 대비" accent="#9ee36f" /><MetricCard icon={<Users size={17} />} label="활성 여행객" value="8,412" change="12.6%" note="지난달 대비" accent="#69d6c0" /><MetricCard icon={<Route size={17} />} label="기록된 루트" value="1,284" change="24.8%" note="새롭게 발견" accent="#7fb7ff" /><MetricCard icon={<Star size={17} />} label="평균 만족도" value="4.72" change="0.18" note="별점 상승" accent="#f6bd68" /></div>
+      <div className="metrics-grid">
+        <MetricCard
+          icon={<MapPin size={17} />}
+          label="총 방문 핑"
+          value={summary ? summary.totalVisits.toLocaleString() : "—"}
+          change={summary ? summary.changeRate : null}
+          note="이전 기간 대비"
+          accent="#9ee36f"
+        />
+        <MetricCard
+          icon={<Users size={17} />}
+          label="활성 여행객"
+          value={summary ? summary.activeTravelers.toLocaleString() : "—"}
+          change={summary ? summary.travelerChangeRate : null}
+          note="이전 기간 대비"
+          accent="#69d6c0"
+        />
+        <MetricCard
+          icon={<Route size={17} />}
+          label="기록된 루트"
+          value={summary ? summary.routeCount.toLocaleString() : "—"}
+          change={summary ? summary.routeChangeRate : null}
+          note="이전 기간 대비"
+          accent="#7fb7ff"
+          sub={summary ? `여행당 평균 ${summary.avgSpotsPerRoute.toFixed(1)}곳 방문` : undefined}
+        />
+        <MetricCard
+          icon={<Star size={17} />}
+          label="평균 만족도"
+          value={summary && summary.averageRating !== null ? summary.averageRating.toFixed(2) : "—"}
+          change={null}
+          note="이전 기간 대비"
+          accent="#f6bd68"
+          sub={
+            summary
+              ? summary.averageRating === null
+                ? "아직 남겨진 평점이 없어요"
+                : `평점 ${summary.ratingCount.toLocaleString()}건 기준`
+              : undefined
+          }
+        />
+      </div>
 
-      <div id="dashboard-trends" className="main-grid"><section className="panel trend-panel"><div className="panel-head"><div><div className="section-kicker">VISITOR MOMENTUM</div><h2>방문 흐름</h2><p>선택한 기간의 핑 기록 추이입니다.</p></div><button className="more-button" onClick={() => toast.info("상세 분석 화면을 준비 중입니다.")}><MoreHorizontal size={18} /></button></div><div className="trend-summary"><div><span className="big-number">{chartTotal}</span><span className="summary-unit">회</span><span className="positive"><ArrowUpRight size={15} />18.4%</span></div><span className="summary-note">지난 기간 대비</span></div><div className="chart-area"><div className="chart-y"><span>30k</span><span>20k</span><span>10k</span><span>0</span></div><div className="bar-chart">{bars.map((height, index) => <div key={index} className="bar-group"><div className={index > 15 ? "bar bright" : "bar"} style={{ height: `${height}%` }} /></div>)}</div><div className="chart-x"><span>8/1</span><span>8/8</span><span>8/15</span><span>8/22</span><span>8/31</span></div></div><div className="chart-footer"><span><i className="dot mint" />전체 방문 핑</span><span><i className="dot yellow" />전년 동기 평균</span><span className="chart-insight"><Zap size={14} />주말 방문이 평일보다 32% 높아요</span></div></section><section className="panel region-panel"><div className="panel-head"><div><div className="section-kicker">TOP DESTINATIONS</div><h2>지역별 인기</h2><p>방문 핑이 많이 쌓인 지역입니다.</p></div><button className="more-button" onClick={() => toast.info("지역별 상세 분석을 준비 중입니다.")}><MoreHorizontal size={18} /></button></div><div className="region-list">{regions.map((item, index) => <div className="region-row" key={item.name}><span className="region-rank">0{index + 1}</span><span className="region-dot" style={{ background: item.color }} /><div className="region-info"><b>{item.name}</b><span>{item.value} 방문</span></div><TinySparkline color={item.color} /><span className={item.tone === "down" ? "region-change down" : "region-change"}>{item.tone === "down" ? <ArrowDownRight size={14} /> : <ArrowUpRight size={14} />}{item.change}</span></div>)}</div><button className="text-link" onClick={() => toast.info("전체 지역 분석을 준비 중입니다.")}>전체 지역 보기 <ChevronRight size={15} /></button></section></div>
+      <div id="dashboard-trends" className="main-grid">
+        <section className="panel trend-panel">
+          <div className="panel-head">
+            <div>
+              <div className="section-kicker">VISITOR MOMENTUM</div>
+              <h2>방문 흐름</h2>
+              <p>막대는 Trip Ping 방문 핑(건), 선은 관광공사 지역 이동량(명)입니다.</p>
+            </div>
+            <button className="more-button" onClick={() => toast.info("상세 분석은 트렌드 분석 화면에서 볼 수 있어요.")}>
+              <MoreHorizontal size={18} />
+            </button>
+          </div>
+          <div className="trend-summary">
+            <div>
+              <span className="big-number">{summary ? summary.totalVisits.toLocaleString() : "—"}</span>
+              <span className="summary-unit">건</span>
+              {summary && (
+                <span className={summary.changeRate >= 0 ? "positive" : "positive down"}>
+                  {summary.changeRate >= 0 ? <ArrowUpRight size={15} /> : <ArrowDownRight size={15} />}
+                  {Math.abs(summary.changeRate).toFixed(1)}%
+                </span>
+              )}
+            </div>
+            <span className="summary-note">이전 기간 대비</span>
+          </div>
+          <div className="chart-area" style={{ height: 240 }}>
+            <ChartContainer config={{}} className="aspect-auto h-full w-full">
+              <ComposedChart data={chartData} margin={{ top: 6, right: hasRegionalSeries ? 4 : 12, left: 0, bottom: 0 }}>
+                <CartesianGrid vertical={false} stroke="#e6edef" strokeDasharray="3 3" />
+                <XAxis
+                  dataKey="date"
+                  ticks={xAxisTicks}
+                  tickFormatter={formatMonthDay}
+                  tickLine={false}
+                  axisLine={false}
+                  tick={{ fontSize: 9, fill: "#a9b5ba" }}
+                />
+                <YAxis
+                  yAxisId="left"
+                  tickLine={false}
+                  axisLine={false}
+                  width={28}
+                  tick={{ fontSize: 9, fill: "#a9b5ba" }}
+                  allowDecimals={false}
+                />
+                {hasRegionalSeries && (
+                  <YAxis
+                    yAxisId="right"
+                    orientation="right"
+                    tickLine={false}
+                    axisLine={false}
+                    width={34}
+                    tick={{ fontSize: 9, fill: "#a9b5ba" }}
+                    tickFormatter={formatManUnit}
+                  />
+                )}
+                <ChartTooltip content={<DashboardTooltip />} />
+                <Bar
+                  yAxisId="left"
+                  dataKey="visitCount"
+                  name="Trip Ping 방문 핑"
+                  fill="#5db4e9"
+                  radius={[3, 3, 0, 0]}
+                  maxBarSize={18}
+                />
+                {/* Recharts는 Bar/Line 같은 아는 타입만 골라내므로 프래그먼트로 묶으면 무시된다.
+                    두 Line은 반드시 ComposedChart의 직계 자식이어야 한다. */}
+                {hasRegionalSeries && (
+                  <Line
+                    yAxisId="right"
+                    type="monotone"
+                    dataKey="actualVisitors"
+                    name="지역 이동량 (관광공사 통계)"
+                    stroke="#5b6b74"
+                    strokeWidth={1.75}
+                    dot={false}
+                    connectNulls={false}
+                    isAnimationActive={false}
+                  />
+                )}
+                {hasRegionalSeries && (
+                  <Line
+                    yAxisId="right"
+                    type="monotone"
+                    dataKey="estimatedVisitors"
+                    name="지역 이동량 (추정)"
+                    stroke="#5b6b74"
+                    strokeWidth={1.75}
+                    strokeDasharray="5 4"
+                    dot={false}
+                    connectNulls={false}
+                    isAnimationActive={false}
+                    legendType="none"
+                  />
+                )}
+              </ComposedChart>
+            </ChartContainer>
+          </div>
+          <div className="chart-footer">
+            <span><i className="dot mint" />Trip Ping 방문 핑</span>
+            {hasRegionalSeries && <span><i className="line-dot" />지역 이동량 (관광공사 통계)</span>}
+            {!hasRegionalSeries && <span className="chart-insight">지역을 선택하면 관광공사 이동량 추세가 함께 표시돼요</span>}
+          </div>
+          {hasRegionalSeries && (
+            <p className="chart-footnote">
+              지역 이동량은 한국관광공사 통계 기준이며, 최근 구간은 작년 동기 데이터로 추정한 값입니다.
+            </p>
+          )}
+        </section>
 
-      <section className="panel map-panel"><div className="panel-head map-head"><div><div className="section-kicker">MOVEMENT NETWORK</div><h2>여행 루트 네트워크</h2><p>실제 여행객이 함께 방문한 관광지의 연결 흐름을 보여줍니다.</p></div><div className="map-actions"><button className="outline-button" onClick={() => toast.info("지도 레이어를 변경했습니다.")}><Map size={15} />레이어</button><button className="outline-button" onClick={() => toast.success("지도 데이터를 CSV로 준비했습니다.")}><Download size={15} />내보내기</button></div></div><RouteMap /></section>
+        <section className="panel region-panel">
+          <div className="panel-head">
+            <div>
+              <div className="section-kicker">TOP DESTINATIONS</div>
+              <h2>지역별 인기</h2>
+              <p>관광공사 이동량 기준 순위입니다.</p>
+            </div>
+            <button className="more-button" onClick={() => toast.info("지역별 상세 분석을 준비 중입니다.")}>
+              <MoreHorizontal size={18} />
+            </button>
+          </div>
+          <div className="region-list">
+            {regionRankQuery.isLoading && <p className="dash-empty">불러오는 중...</p>}
+            {!regionRankQuery.isLoading && regionRanks.length === 0 && (
+              <p className="dash-empty">지역별 데이터를 불러오지 못했어요.</p>
+            )}
+            {regionRanks.slice(0, 5).map((item, index) => (
+              <div className="region-row" key={item.regionName}>
+                <span className="region-rank">0{index + 1}</span>
+                <span className="region-dot" style={{ background: REGION_TONES[index % REGION_TONES.length] }} />
+                <div className="region-info">
+                  <b>{item.regionName}</b>
+                  <span>
+                    {item.regionVisitors === null
+                      ? "이동량 데이터 없음"
+                      : `지역 이동량 ${formatManUnit(item.regionVisitors)}명`}
+                  </span>
+                </div>
+                <span className="region-change">
+                  {item.visitPings.toLocaleString()} 핑
+                </span>
+              </div>
+            ))}
+          </div>
+          <button className="text-link" onClick={() => toast.info("전체 지역 분석을 준비 중입니다.")}>
+            전체 지역 보기 <ChevronRight size={15} />
+          </button>
+        </section>
+      </div>
 
-      <div id="dashboard-products" className="bottom-grid"><section className="panel routes-panel"><div className="panel-head"><div><div className="section-kicker">POPULAR COMBINATIONS</div><h2>인기 관광지 조합</h2></div><button className="more-button" onClick={() => toast.info("인기 조합 전체 보기를 준비 중입니다.")}><MoreHorizontal size={18} /></button></div><div className="route-list">{routes.map((route) => <button className="route-row" key={route.rank} onClick={() => toast.info(`${route.route} 상세 분석을 준비 중입니다.`)}><span className="route-rank">{route.rank}</span><span className="route-accent" style={{ background: route.color }} /><div className="route-copy"><b>{route.route}</b><span>{route.meta}</span></div><div className="route-stats"><b>{route.count}</b><span><ArrowUpRight size={13} />{route.delta}</span></div><ChevronRight size={17} className="muted" /></button>)}</div><button className="text-link" onClick={() => toast.info("루트 분석 화면을 준비 중입니다.")}>모든 조합 분석하기 <ChevronRight size={15} /></button></section><section className="panel opportunity-panel"><div className="opportunity-glow" /><div className="section-kicker">NEXT OPPORTUNITY</div><div className="opportunity-icon"><Sparkles size={21} /></div><h2>새로운 상품 기회를<br /><em>발견했어요.</em></h2><p>제주 동부 해안에 머무는 여행객이<br />지난달보다 24.8% 늘었습니다.</p><button className="dark-button" onClick={() => toast.success("상품 설계 화면을 열었습니다.")}>상품 초안 만들기 <ArrowUpRight size={16} /></button><div className="opportunity-meta"><span><MapPin size={14} />제주 동부</span><span><TrendingUp size={14} />급상승 루트</span></div></section></div>
+      <section className="panel map-panel">
+        <div className="panel-head map-head">
+          <div>
+            <div className="section-kicker">MOVEMENT NETWORK</div>
+            <h2>여행 루트 네트워크</h2>
+            <p>실제 여행객이 이어서 방문한 관광지의 연결 흐름입니다.</p>
+          </div>
+          <div className="map-actions">
+            <button className="outline-button" onClick={() => toast.info("지도 레이어 전환을 준비 중입니다.")}>
+              <MapIcon size={15} />레이어
+            </button>
+            <button className="outline-button" onClick={downloadReport}>
+              <Download size={15} />내보내기
+            </button>
+          </div>
+        </div>
+        <RouteMap network={networkQuery.data} isLoading={networkQuery.isLoading} />
+      </section>
 
-      <footer className="page-footer"><span>Trip Ping Insight Portal · 데이터 기준 2026.08.31</span><span>한국관광공사 OpenAPI + Trip Ping 익명화 이동 데이터</span></footer>
+      <div id="dashboard-products" className="bottom-grid">
+        <section className="panel routes-panel">
+          <div className="panel-head">
+            <div>
+              <div className="section-kicker">POPULAR COMBINATIONS</div>
+              <h2>인기 관광지 조합</h2>
+            </div>
+            <button className="more-button" onClick={() => toast.info("인기 조합 전체 보기를 준비 중입니다.")}>
+              <MoreHorizontal size={18} />
+            </button>
+          </div>
+          <div className="route-list">
+            {routesQuery.isLoading && <p className="dash-empty">불러오는 중...</p>}
+            {!routesQuery.isLoading && (routesQuery.data?.length ?? 0) === 0 && (
+              <p className="dash-empty">
+                아직 이 기간·지역에 기록된 관광지 조합이 없어요.
+                <br />
+                여행객이 두 곳 이상을 이어서 방문하면 여기에 쌓입니다.
+              </p>
+            )}
+            {routesQuery.data?.map((route, index) => (
+              <button
+                className="route-row"
+                key={route.routeName}
+                onClick={() => toast.info(`${route.routeName} 상세 분석을 준비 중입니다.`)}
+              >
+                <span className="route-rank">0{index + 1}</span>
+                <span className="route-accent" style={{ background: REGION_TONES[index % REGION_TONES.length] }} />
+                <div className="route-copy">
+                  <b>{route.routeName}</b>
+                  <span>관광지 {route.spotIds.length}곳</span>
+                </div>
+                <div className="route-stats">
+                  <b>{route.visitCount.toLocaleString()}회</b>
+                  <span>
+                    {route.changeRate >= 0 ? <ArrowUpRight size={13} /> : <ArrowDownRight size={13} />}
+                    {signed(route.changeRate)}
+                  </span>
+                </div>
+                <ChevronRight size={17} className="muted" />
+              </button>
+            ))}
+          </div>
+          <button className="text-link" onClick={() => toast.info("루트 분석 화면을 준비 중입니다.")}>
+            모든 조합 분석하기 <ChevronRight size={15} />
+          </button>
+        </section>
 
-      {reportReady && <div className="download-toast"><FileText size={16} />리포트가 다운로드 폴더에 저장되었습니다.<button onClick={() => setReportReady(false)}><X size={14} /></button></div>}
+        <section className="panel opportunity-panel">
+          <div className="opportunity-glow" />
+          <div className="section-kicker">NEXT OPPORTUNITY</div>
+          <div className="opportunity-icon"><Sparkles size={21} /></div>
+          {topRoute ? (
+            <>
+              <h2>새로운 상품 기회를<br /><em>발견했어요.</em></h2>
+              <p>
+                {topRoute.routeName} 조합이<br />
+                이전 기간 대비 {signed(topRoute.changeRate)} 변화했어요.
+              </p>
+              <button className="dark-button" onClick={() => toast.success("상품 설계 화면을 열었습니다.")}>
+                상품 초안 만들기 <ArrowUpRight size={16} />
+              </button>
+              <div className="opportunity-meta">
+                <span><MapPin size={14} />{region}</span>
+                <span><TrendingUp size={14} />관광지 {topRoute.spotIds.length}곳</span>
+              </div>
+            </>
+          ) : (
+            <>
+              <h2>기회를 찾는 중<br /><em>이에요.</em></h2>
+              <p>
+                아직 이 기간·지역에는 상품으로 만들 만한<br />
+                루트 조합이 쌓이지 않았어요.
+              </p>
+              <div className="opportunity-meta">
+                <span><MapPin size={14} />{region}</span>
+                <span><TrendingUp size={14} />{period}</span>
+              </div>
+            </>
+          )}
+        </section>
+      </div>
+
+      <footer className="page-footer">
+        <span>Trip Ping Insight Portal · 데이터 기준 {fmtDot(range.to)}</span>
+        <span>한국관광공사 OpenAPI + Trip Ping 익명화 이동 데이터</span>
+      </footer>
+
+      {reportReady && (
+        <div className="download-toast">
+          <FileText size={16} />
+          리포트가 다운로드 폴더에 저장되었습니다.
+          <button onClick={() => setReportReady(false)}><X size={14} /></button>
+        </div>
+      )}
     </PortalChrome>
   );
 }

@@ -1,4 +1,4 @@
-import { ArrowDownRight, ArrowUpRight, Download, Filter, MapPin, Route, Sparkles, TrendingUp } from "lucide-react";
+import { ArrowDownRight, ArrowUpRight, Download, Filter, MapPin, Route, TrendingUp, Users } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -61,18 +61,39 @@ type ChartPoint = {
 };
 
 function buildChartData(daily: DailyVisit[], regional: RegionalVisitor[]): ChartPoint[] {
-  const visitByDate = new Map(daily.map((d) => [d.date, d.visitCount]));
-  const regionalByDate = new Map(regional.map((d) => [d.date, d]));
+  const visitByDate: Record<string, number> = {};
+  daily.forEach((d) => {
+    visitByDate[d.date] = d.visitCount;
+  });
+  const regionalByDate: Record<string, RegionalVisitor> = {};
+  regional.forEach((d) => {
+    regionalByDate[d.date] = d;
+  });
 
-  // 두 API의 날짜를 합집합으로 모은다. 자체 방문 핑이 아직 하나도 없는 지역이라
-  // daily가 비어 있거나 구간이 어긋나도 관광공사 이동량 선은 그대로 그려져야 하기 때문.
-  const allDates = Array.from(new Set([...visitByDate.keys(), ...regionalByDate.keys()])).sort();
+  // 두 API 날짜의 합집합. 자체 방문 핑이 아직 하나도 없는 지역이라 daily가 비어 있거나
+  // 구간이 어긋나도 관광공사 이동량 선은 그대로 그려져야 하기 때문에 합집합으로 돈다.
+  // (Set/Map 이터레이터 전개는 tsconfig target 때문에 쓸 수 없어 객체로 중복 제거한다.)
+  const seen: Record<string, true> = {};
+  const allDates: string[] = [];
+  daily.forEach((d) => {
+    if (!seen[d.date]) {
+      seen[d.date] = true;
+      allDates.push(d.date);
+    }
+  });
+  regional.forEach((d) => {
+    if (!seen[d.date]) {
+      seen[d.date] = true;
+      allDates.push(d.date);
+    }
+  });
+  allDates.sort();
 
   const points: ChartPoint[] = allDates.map((date) => {
-    const r = regionalByDate.get(date);
+    const r = regionalByDate[date];
     return {
       date,
-      visitCount: visitByDate.get(date) ?? 0,
+      visitCount: visitByDate[date] ?? 0,
       totalVisitors: r ? r.totalVisitors : null,
       isEstimated: r ? r.isEstimated : null,
       actualVisitors: null,
@@ -163,6 +184,13 @@ export default function Trends() {
     queryKey: ["insight", "trends-regional-visitors", period, region],
     queryFn: () => insightApi.regionalVisitors(period, region).then((res) => res.data),
   });
+
+  const dashboardQuery = useQuery({
+    queryKey: ["dashboard", "summary", region, startDate, endDate],
+    queryFn: () => insightApi.dashboardSummary(period, region, endDate, startDate).then((res) => res.data),
+  });
+
+  const dash = dashboardQuery.data;
 
   const totalVisits = summaryQuery.data ? summaryQuery.data.totalVisits.toLocaleString() : "—";
   const changeRate = summaryQuery.data ? summaryQuery.data.changeRate : null;
@@ -308,22 +336,22 @@ export default function Trends() {
         </div>
         <div className="trend-kpi">
           <span>
-            <Route size={16} />평균 체류 시간
+            <Route size={16} />여행당 평균 방문지
           </span>
-          <b>4.7h</b>
+          <b>{dash ? `${dash.avgSpotsPerRoute.toFixed(1)}곳` : "—"}</b>
           <small>
-            <ArrowUpRight size={13} />
-            12.1% 상승
+            {dash && (dash.avgSpotsChangeRate >= 0 ? <ArrowUpRight size={13} /> : <ArrowDownRight size={13} />)}
+            {dash ? `${Math.abs(dash.avgSpotsChangeRate).toFixed(1)}% 이전 기간 대비` : "불러오는 중..."}
           </small>
         </div>
         <div className="trend-kpi">
           <span>
-            <Sparkles size={16} />신규 기회 점수
+            <Users size={16} />활성 여행객
           </span>
-          <b>86</b>
+          <b>{dash ? dash.activeTravelers.toLocaleString() : "—"}</b>
           <small>
-            <ArrowUpRight size={13} />
-            상위 8% 루트
+            {dash && (dash.travelerChangeRate >= 0 ? <ArrowUpRight size={13} /> : <ArrowDownRight size={13} />)}
+            {dash ? `${Math.abs(dash.travelerChangeRate).toFixed(1)}% 이전 기간 대비` : "불러오는 중..."}
           </small>
         </div>
       </div>
@@ -333,7 +361,7 @@ export default function Trends() {
           <div className="panel-title">
             <div>
               <span>ROUTE MOMENTUM</span>
-              <h2>지역별 이동량 변화</h2>
+              <h2>방문 추이</h2>
             </div>
             <span className="panel-note">막대: 방문 핑(건) · 선: 이동량(명)</span>
           </div>

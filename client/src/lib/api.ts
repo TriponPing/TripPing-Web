@@ -242,6 +242,49 @@ export type RegionalVisitor = {
   isEstimated: boolean; // true면 작년 동기 데이터 기반 추정치, false면 실측치.
 };
 
+// ---- 대시보드 (GET /b2b/insight/dashboard/*) ----
+// 기간·지역 파라미터 규약은 트렌드 API와 동일해서, 같은 기간을 보면 totalVisits가
+// trendsSummary.totalVisits와 항상 일치한다 (같은 집계 쿼리를 재사용).
+
+export type DashboardSummary = {
+  totalVisits: number;          // 총 방문 핑 (스팟 체크인 건수)
+  changeRate: number;
+  activeTravelers: number;      // 기간 내 여행 기록을 남긴 서로 다른 사용자 수
+  travelerChangeRate: number;
+  routeCount: number;           // 기간 내 기록된 실제 여행 건수
+  routeChangeRate: number;
+  // 여행당 평균 방문 관광지 수. 핑 시각(visit_time)은 사용자가 임의로 찍는 값이라
+  // 체류 시간을 계산할 수 없어서, 시간에 의존하지 않는 이 지표로 대체했다.
+  avgSpotsPerRoute: number;
+  avgSpotsChangeRate: number;
+  averageRating: number | null; // 평점이 하나도 없으면 null (지어내지 않음)
+  ratingCount: number;
+};
+
+// 지역별 인기 한 줄. 정렬은 백엔드가 regionVisitors(관광공사) 기준으로 이미 해서 준다.
+export type RegionRank = {
+  regionName: string;
+  visitPings: number;            // Trip Ping 자체 방문 핑 (아직 희소할 수 있음)
+  regionVisitors: number | null; // 관광공사 DataLab 기준 방문자수. 조회 실패 시 null
+};
+
+// 이동 네트워크 지도용. 좌표는 핑 시점의 실제 위치 평균(없으면 관광지 등록 좌표)이라
+// 그대로 투영하면 된다. 좌표가 없는 관광지는 백엔드가 이미 빼고 준다.
+export type RouteNetwork = {
+  nodes: {
+    spotId: number;
+    name: string;
+    latitude: number;
+    longitude: number;
+    visitCount: number;
+  }[];
+  edges: {
+    fromSpotId: number;
+    toSpotId: number;
+    weight: number; // 이 이동이 관측된 횟수 (선 굵기용)
+  }[];
+};
+
 export type ReportStatus = "COMPLETED" | "IN_PROGRESS";
 
 export type ReportSummary = {
@@ -283,6 +326,13 @@ export const insightApi = {
     api.get<SpotEvidence>("/b2b/insight/spots/evidence", { params: { spotIds: spotIds.join(",") } }),
   regionalVisitors: (period: string, region: string) =>
     api.get<RegionalVisitor[]>("/b2b/insight/trends/regional-visitors", { params: { period, region } }),
+  dashboardSummary: (period: string, region: string, endDate?: string, startDate?: string) =>
+    api.get<DashboardSummary>("/b2b/insight/dashboard/summary", { params: { period, region, endDate, startDate } }),
+  // 지역끼리 비교하는 게 목적이라 region 파라미터를 받지 않는다.
+  dashboardRegions: (period: string, endDate?: string, startDate?: string) =>
+    api.get<RegionRank[]>("/b2b/insight/dashboard/regions", { params: { period, endDate, startDate } }),
+  dashboardNetwork: (period: string, region: string, endDate?: string, startDate?: string) =>
+    api.get<RouteNetwork>("/b2b/insight/dashboard/network", { params: { period, region, endDate, startDate } }),
   reports: () => api.get<ReportSummary[]>("/b2b/insight/reports"),
   createReport: (data: ReportCreateRequest) =>
     api.post<ReportDetail>("/b2b/insight/reports", data),
