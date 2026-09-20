@@ -1,4 +1,4 @@
-import type { PlaceSearchResult, Region } from "./api";
+import type { Region, SpotSearchResult } from "./api";
 
 export const productStatuses = ["초안", "검토 중", "완료", "게시"] as const;
 
@@ -21,23 +21,20 @@ export type RouteStop = {
 export const durationOptions = ["당일", "1박 2일", "2박 3일"];
 export const targetOptions = ["20–30대 커플", "가족 여행객", "외국인 관광객"];
 
-// 백엔드 관광지 검색 결과를 일정 항목으로 옮긴다. 후기·혼잡도가 아직
-// 쌓이지 않아 평점 자리는 비워두고, 있는 정보로 설명을 만든다.
-export function stopFromPlace(place: PlaceSearchResult, region: string) {
-  const parts = [place.category, place.popularTimeSlot]
-    .filter(part => part && part !== "정보 없음")
-    .join(" · ");
+// 등록까지 끝난 관광지를 일정 항목으로 옮긴다. 후기·혼잡도가 아직 쌓이지
+// 않아 평점 자리는 비워두고, 분류와 주소로 설명을 만든다.
+export function stopFromPlace(place: SpotSearchResult, region: string) {
   const stop: RouteStop = {
     id: `spot-${place.spotId}-${Math.random().toString(36).slice(2, 7)}`,
     name: place.name,
-    desc: parts || place.address,
+    desc: place.category ?? place.address ?? "",
     score: spotMeta(place.name)?.score ?? "-",
     congestion: spotMeta(place.name)?.congestion,
     region,
-    spotId: place.spotId,
-    address: place.address,
-    latitude: place.latitude,
-    longitude: place.longitude,
+    spotId: place.spotId ?? undefined,
+    address: place.address ?? undefined,
+    latitude: place.latitude ?? undefined,
+    longitude: place.longitude ?? undefined,
   };
   return stop;
 }
