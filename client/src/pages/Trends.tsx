@@ -1,4 +1,4 @@
-import { ArrowDownRight, ArrowUpRight, Download, Filter, MapPin, Route, TrendingUp, Users } from "lucide-react";
+import { ArrowDownRight, ArrowUpRight, Download, Filter, Loader2, MapPin, Route, TrendingUp, Users } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -206,6 +206,10 @@ export default function Trends() {
 
   const chartData = useMemo(() => buildChartData(dailyData, regionalData), [dailyData, regionalData]);
 
+  // 관광공사 API는 최초 조회 시 1년치를 페이지네이션으로 받아와 몇 초 걸린다.
+  // 아무것도 못 그리는 동안에는 빈 차트 대신 진행 중임을 알려준다.
+  const isChartLoading = dailyQuery.isLoading || regionalQuery.isLoading;
+
   const labelIndexes =
     chartData.length <= 7
       ? chartData.map((_, i) => i)
@@ -366,6 +370,17 @@ export default function Trends() {
             <span className="panel-note">막대: 방문 핑(건) · 선: 이동량(명)</span>
           </div>
           <div className="large-chart">
+            {chartData.length === 0 && isChartLoading && (
+              <div className="chart-loading">
+                <Loader2 size={18} className="spin" />
+                <b>데이터를 불러오는 중이에요</b>
+                <small>
+                  지역을 처음 조회할 때는 관광공사 공공데이터에서 1년치를 받아오느라
+                  <br />
+                  몇 초 걸릴 수 있어요. 한 번 불러온 구간은 이후 바로 표시됩니다.
+                </small>
+              </div>
+            )}
             <ChartContainer config={{}} className="aspect-auto h-full w-full">
               <ComposedChart data={chartData} margin={{ top: 6, right: hasRegionalSeries ? 4 : 12, left: 0, bottom: 0 }}>
                 <CartesianGrid vertical={false} stroke="#e6edef" strokeDasharray="3 3" />
@@ -448,6 +463,12 @@ export default function Trends() {
               <span>
                 <i className="line-dot" />
                 지역 이동량 (관광공사 통계)
+              </span>
+            )}
+            {regionalQuery.isFetching && chartData.length > 0 && (
+              <span className="legend-loading">
+                <Loader2 size={12} className="spin" />
+                지역 이동량 불러오는 중…
               </span>
             )}
           </div>

@@ -10,6 +10,7 @@ import {
   FileText,
   Filter,
   Layers3,
+  Loader2,
   Map as MapIcon,
   MapPin,
   MoreHorizontal,
@@ -33,6 +34,7 @@ import {
   type TooltipProps,
 } from "recharts";
 import PortalChrome from "@/components/PortalChrome";
+import RouteNetworkMap from "@/components/RouteNetworkMap";
 import { ChartContainer, ChartTooltip } from "@/components/ui/chart";
 import {
   authApi,
@@ -252,7 +254,16 @@ function RouteMap({ network, isLoading }: { network: RouteNetwork | undefined; i
   const maxEdgeWeight = Math.max(...(network?.edges ?? []).map((e) => e.weight), 1);
 
   if (isLoading) {
-    return <div className="route-map"><div className="map-grid" /><p className="map-empty">불러오는 중...</p></div>;
+    return (
+      <div className="route-map">
+        <div className="map-grid" />
+        <p className="map-empty">
+          <Loader2 size={18} className="spin" />
+          <br />
+          이동 경로를 불러오는 중이에요
+        </p>
+      </div>
+    );
   }
 
   if (placed.length === 0) {
@@ -367,6 +378,9 @@ export default function Dashboard() {
   const regionalData = regionalQuery.data ?? [];
   const hasRegionalSeries = regionalData.length > 0;
   const chartData = useMemo(() => buildChartData(dailyData, regionalData), [dailyData, regionalData]);
+
+  // 관광공사 API는 최초 조회 시 1년치를 페이지네이션으로 받아와 몇 초 걸린다.
+  const isChartLoading = dailyQuery.isLoading || regionalQuery.isLoading;
   const topRoute = routesQuery.data?.[0];
   const regionRanks = regionRankQuery.data ?? [];
 
@@ -557,6 +571,17 @@ export default function Dashboard() {
             <span className="summary-note">이전 기간 대비</span>
           </div>
           <div className="chart-area" style={{ height: 240 }}>
+            {chartData.length === 0 && isChartLoading && (
+              <div className="chart-loading">
+                <Loader2 size={18} className="spin" />
+                <b>데이터를 불러오는 중이에요</b>
+                <small>
+                  지역을 처음 조회할 때는 관광공사 공공데이터에서 1년치를 받아오느라
+                  <br />
+                  몇 초 걸릴 수 있어요. 한 번 불러온 구간은 이후 바로 표시됩니다.
+                </small>
+              </div>
+            )}
             <ChartContainer config={{}} className="aspect-auto h-full w-full">
               <ComposedChart data={chartData} margin={{ top: 6, right: hasRegionalSeries ? 4 : 12, left: 0, bottom: 0 }}>
                 <CartesianGrid vertical={false} stroke="#e6edef" strokeDasharray="3 3" />
@@ -632,6 +657,9 @@ export default function Dashboard() {
           <div className="chart-footer">
             <span><i className="dot mint" />Trip Ping 방문 핑</span>
             {hasRegionalSeries && <span><i className="line-dot" />지역 이동량 (관광공사 통계)</span>}
+            {regionalQuery.isFetching && chartData.length > 0 && (
+              <span className="legend-loading"><Loader2 size={12} className="spin" />지역 이동량 불러오는 중…</span>
+            )}
             {!hasRegionalSeries && <span className="chart-insight">지역을 선택하면 관광공사 이동량 추세가 함께 표시돼요</span>}
           </div>
           {hasRegionalSeries && (
@@ -697,7 +725,10 @@ export default function Dashboard() {
             </button>
           </div>
         </div>
-        <RouteMap network={networkQuery.data} isLoading={networkQuery.isLoading} />
+        <RouteNetworkMap
+          network={networkQuery.data}
+          fallback={<RouteMap network={networkQuery.data} isLoading={networkQuery.isLoading} />}
+        />
       </section>
 
       <div id="dashboard-products" className="bottom-grid">
