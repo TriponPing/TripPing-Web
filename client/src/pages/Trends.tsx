@@ -46,9 +46,6 @@ export default function Trends() {
     setRange(rangeForPeriod(item, todayDate));
   }
 
-  // 드롭다운에 백엔드 region 테이블의 실제 region_name("서울", "제주" 등)을 그대로 쓴다 —
-  // 프론트에서 "서울특별시" 같은 긴 이름을 임의로 만들면 InsightRouteRepository의
-  // exact-match 쿼리에 안 걸려서 항상 0건으로 나온다 (실제로 겪은 문제).
   const regionsQuery = useQuery({
     queryKey: ["regions"],
     queryFn: () => placesApi.regions().then((res) => res.data),
@@ -64,10 +61,14 @@ export default function Trends() {
     queryFn: () => insightApi.risingRoutes(period, region, endDate, startDate).then((res) => res.data),
   });
 
-  // 일자별 이동량(막대그래프) - summary의 "총 방문 핑"과 같은 집계를 날짜별로 쪼갠 것.
   const dailyQuery = useQuery({
     queryKey: ["insight", "trends-daily", period, region],
     queryFn: () => insightApi.dailyVisits(period, region).then((res) => res.data),
+  });
+
+  const regionalQuery = useQuery({
+    queryKey: ["insight", "trends-regional-visitors", period, region],
+    queryFn: () => insightApi.regionalVisitors(period, region).then((res) => res.data),
   });
 
   const totalVisits = summaryQuery.data ? summaryQuery.data.totalVisits.toLocaleString() : "—";
@@ -76,10 +77,8 @@ export default function Trends() {
 
   const dailyData = dailyQuery.data ?? [];
   const maxDailyVisits = Math.max(1, ...dailyData.map((d) => d.visitCount));
-  // "최근 N일" 구간 중 마지막 7일(또는 구간 전체가 7일 이하면 전체)을 파란색으로 강조.
   const highlightCount = Math.min(7, dailyData.length);
   const highlightStartIndex = dailyData.length - highlightCount;
-  // 날짜가 많을 때(최근 30일/1년)는 x축에 5개 지점만 골라서 보여준다.
   const labelIndexes =
     dailyData.length <= 7
       ? dailyData.map((_, i) => i)
@@ -93,7 +92,9 @@ export default function Trends() {
           ])
         );
 
-  // 필드에 쉼표·줄바꿈·따옴표가 섞여 있어도 엑셀에서 열이 안 밀리도록 감싼다.
+  const regionalTotal = (regionalQuery.data ?? []).reduce((sum, d) => sum + d.totalVisitors, 0);
+  const hasRegionalContext = region !== ALL_REGIONS_LABEL && regionalTotal > 0;
+
   function csvField(value: string | number) {
     const s = String(value);
     return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
@@ -141,7 +142,6 @@ export default function Trends() {
 
     lines.push("", csvRow("Trip Ping B2B 포털에서 자동 생성된 리포트입니다."));
 
-    // 엑셀에서 한글 안 깨지게 UTF-8 BOM 붙임.
     const blob = new Blob(["﻿" + lines.join("\n")], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
@@ -157,8 +157,6 @@ export default function Trends() {
       <div className="trend-toolbar">
         <div className="period-pills">
           {insightPeriods.map((item) => {
-            // 달력에서 임의 구간을 고르면 어떤 pill과도 안 맞을 수 있으니, 실제로 현재
-            // range가 그 pill이 뜻하는 구간이랑 똑같을 때만 선택된 것처럼 표시한다.
             const matches = range.to && toIsoDate(range.to) === toIsoDate(todayDate) && startDate === toIsoDate(rangeForPeriod(item, todayDate).from!);
             return (
               <button key={item} className={matches ? "selected" : ""} onClick={() => selectPeriod(item)}>
@@ -198,7 +196,6 @@ export default function Trends() {
             {changeRate !== null ? `${Math.abs(changeRate).toFixed(1)}% 이전 기간 대비` : "불러오는 중..."}
           </small>
         </div>
-        {/* 아래 2개 KPI는 아직 대응하는 백엔드 API가 없어 임시 고정값으로 남겨둠 */}
         <div className="trend-kpi">
           <span>
             <TrendingUp size={16} />급상승 루트
@@ -272,9 +269,16 @@ export default function Trends() {
               <i className="gray-dot" />
               이전 날짜
             </span>
-            {/* 아래 문구는 아직 실데이터 기반 자동생성이 아니라 고정 예시 문구임 */}
             <b>
-              <TrendingUp size={13} /> 주말에 제주 동부 방문이 집중돼요
+              {hasRegionalContext ? (
+                <>
+                  <TrendingUp size={13} /> {region} 전체 방문자 {regionalTotal.toLocaleString()}명 · 관광공사 통계({period})
+                </>
+              ) : (
+                <>
+                  <TrendingUp size={13} /> 주말에 제주 동부 방문이 집중돼요
+                </>
+              )}
             </b>
           </div>
         </section>
