@@ -18,6 +18,18 @@ export type RouteStop = {
   longitude?: number;
 };
 
+// tourist_spot.category에 실제로 들어 있는 값. 앱과 같은 분류를 쓴다.
+export const spotCategories = [
+  { code: "attraction", label: "관광지" },
+  { code: "restaurant", label: "식당" },
+  { code: "cafe", label: "카페" },
+] as const;
+
+export function categoryLabel(code?: string | null) {
+  if (!code) return "";
+  return spotCategories.find(item => item.code === code)?.label ?? code;
+}
+
 export const durationOptions = ["당일", "1박 2일", "2박 3일"];
 export const targetOptions = ["20–30대 커플", "가족 여행객", "외국인 관광객"];
 
@@ -27,7 +39,7 @@ export function stopFromPlace(place: SpotSearchResult, region: string) {
   const stop: RouteStop = {
     id: `spot-${place.spotId}-${Math.random().toString(36).slice(2, 7)}`,
     name: place.name,
-    desc: place.category ?? place.address ?? "",
+    desc: categoryLabel(place.category) || place.address || "",
     score: spotMeta(place.name)?.score ?? "-",
     congestion: spotMeta(place.name)?.congestion,
     region,
