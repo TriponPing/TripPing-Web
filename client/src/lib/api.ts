@@ -285,3 +285,29 @@ export const insightApi = {
   reportDetail: (reportId: number) =>
     api.get<ReportDetail>(`/b2b/insight/reports/${reportId}`),
 };
+
+// 상품 일정에 넣을 관광지 검색 (B2bSpotController).
+//
+// 우리 DB(tourist_spot)와 한국관광공사를 함께 찾는다. registered가 false면
+// 아직 DB에 없는 관광공사 후보라, 일정에 담기 전에 register로 등록해서
+// spotId를 받아야 한다. 일정은 spotId로 저장되기 때문이다.
+export type SpotSearchResult = {
+  spotId: number | null;
+  contentId: string | null;
+  name: string;
+  address: string | null;
+  category: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  imageUrl: string | null;
+  registered: boolean;
+};
+
+export const spotsApi = {
+  search: (query: string) =>
+    api.get<SpotSearchResult[]>("/b2b/spots/search", { params: { query } }),
+  register: (contentId: string) =>
+    api.post<SpotSearchResult>("/b2b/spots/register", null, {
+      params: { contentId },
+    }),
+};

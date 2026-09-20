@@ -24,9 +24,10 @@ import ProductRouteMap from "@/components/ProductRouteMap";
 import {
   placesApi,
   productsApi,
-  type PlaceSearchResult,
+  spotsApi,
   type ProductDetail as ProductDetailDto,
   type Region,
+  type SpotSearchResult,
 } from "@/lib/api";
 import {
   durationLabel,
@@ -178,7 +179,8 @@ export default function ProductDetail() {
   const [spotQuery, setSpotQuery] = useState("");
   const [picking, setPicking] = useState(false);
   const [regions, setRegions] = useState<Region[]>([]);
-  const [results, setResults] = useState<PlaceSearchResult[]>([]);
+  const [results, setResults] = useState<SpotSearchResult[]>([]);
+  const [adding, setAdding] = useState<string | null>(null);
   const [searching, setSearching] = useState(false);
   const dragFrom = useRef<number | null>(null);
 
@@ -232,7 +234,7 @@ export default function ProductDetail() {
     }
     setSearching(true);
     const timer = setTimeout(() => {
-      placesApi
+      spotsApi
         .search(query)
         .then(({ data }) => setResults(data))
         .catch(() => setResults([]))
@@ -300,28 +302,66 @@ export default function ProductDetail() {
   };
 
   const searchResults = results
-    .filter(place => !draft.route.some(stop => stop.spotId === place.spotId))
-    .slice(0, 6);
+    .filter(
+      place =>
+        !draft.route.some(
+          stop => stop.spotId != null && stop.spotId === place.spotId
+        )
+    )
+    .slice(0, 8);
 
   const problemStops = draft.route.filter(needsAlternative);
+
+  // 일정은 spotId로 저장되므로, 아직 등록되지 않은 관광공사 후보는 먼저
+  // 등록해서 spotId를 받아야 한다.
+  const ensureRegistered = async (place: SpotSearchResult) => {
+    if (place.registered && place.spotId != null) return place;
+    if (!place.contentId) return null;
+    const { data } = await spotsApi.register(place.contentId);
+    return data;
+  };
+
+  const addStop = async (place: SpotSearchResult) => {
+    setAdding(place.contentId ?? place.name);
+    try {
+      const ready = await ensureRegistered(place);
+      if (!ready?.spotId) {
+        toast.error("이 관광지는 일정에 담을 수 없습니다.");
+        return;
+      }
+      const region = regionFromAddress(ready.address ?? "", regions);
+      const code = regions.find(item => item.regionName === region)?.regionId;
+      patch({
+        route: [...draft.route, stopFromPlace(ready, region)],
+        regionId: draft.regionId ?? code ?? null,
+      });
+      setSpotQuery("");
+      setPicking(false);
+    } catch {
+      toast.error("관광지를 등록하지 못했습니다.");
+    } finally {
+      setAdding(null);
+    }
+  };
 
   // 추천 목록은 보조 데이터에만 있으므로, 교체할 때 실제 관광지를 찾아
   // spotId를 받아온다. 그래야 저장이 된다.
   const replaceStop = async (targetId: string, spotName: string) => {
     try {
-      const { data } = await placesApi.search(spotName);
+      const { data } = await spotsApi.search(spotName);
       const found = data.find(place => place.name === spotName) ?? data[0];
-      if (!found) {
+      const ready = found ? await ensureRegistered(found) : null;
+      if (!ready?.spotId) {
         toast.error(`${spotName}을(를) 관광지 목록에서 찾지 못했습니다.`);
         return;
       }
-      const region = regionFromAddress(found.address, regions);
+      const region = regionFromAddress(ready.address ?? "", regions);
       patch({
         route: draft.route.map(item =>
-          item.id === targetId ? stopFromPlace(found, region) : item
+          item.id === targetId ? stopFromPlace(ready, region) : item
         ),
       });
-      toast.success(`${found.name}(으)로 교체했습니다.`);
+      toast.success(`${ready.name}(으)로 교체했습니다.`);
     } catch {
       toast.error("관광지를 불러오지 못했습니다.");
     }
@@ -408,41 +448,42 @@ export default function ProductDetail() {
                     onChange={event => setSpotQuery(event.target.value)}
                   />
                 </div>
-                {searchResults.map(place => (
-                  <button
-                    key={place.spotId}
-                    style={{
-                      width: "100%",
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 8,
-                      padding: "9px 4px",
-                      background: "transparent",
-                      borderBottom: "1px solid #f0f3f4",
-                      textAlign: "left",
-                    }}
-                    onClick={() => {
-                      const region = regionFromAddress(place.address, regions);
-                      const code = regions.find(
-                        item => item.regionName === region
-                      )?.regionId;
-                      patch({
-                        route: [...draft.route, stopFromPlace(place, region)],
-                        regionId: draft.regionId ?? code ?? null,
-                      });
-                      setSpotQuery("");
-                      setPicking(false);
-                    }}
-                  >
-                    <MapPin size={14} color="#0074CE" />
-                    <span style={{ flex: 1, fontSize: 10, color: "#4d6570" }}>
-                      <b>{place.name}</b>
-                      <small style={{ display: "block", color: "#9eacb2" }}>
-                        {place.address}
-                      </small>
-                    </span>
-                  </button>
-                ))}
+                {searchResults.map(place => {
+                  const busy = adding === (place.contentId ?? place.name);
+                  return (
+                    <button
+                      key={place.contentId ?? `spot-${place.spotId}`}
+                      disabled={adding !== null}
+                      style={{
+                        width: "100%",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 8,
+                        padding: "9px 4px",
+                        background: "transparent",
+                        borderBottom: "1px solid #f0f3f4",
+                        textAlign: "left",
+                        opacity: adding !== null && !busy ? 0.5 : 1,
+                      }}
+                      onClick={() => addStop(place)}
+                    >
+                      <MapPin size={14} color="#0074CE" />
+                      <span style={{ flex: 1, fontSize: 10, color: "#4d6570" }}>
+                        <b>{place.name}</b>
+                        <small style={{ display: "block", color: "#9eacb2" }}>
+                          {[place.category, place.address]
+                            .filter(Boolean)
+                            .join(" · ")}
+                        </small>
+                      </span>
+                      {busy && (
+                        <small style={{ color: "#9eacb2", fontSize: 9 }}>
+                          담는 중…
+                        </small>
+                      )}
+                    </button>
+                  );
+                })}
                 {searchResults.length === 0 && (
                   <p
                     style={{
