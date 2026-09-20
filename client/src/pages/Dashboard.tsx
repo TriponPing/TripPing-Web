@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Activity,
   ArrowDownRight,
@@ -9,7 +9,6 @@ import {
   Download,
   FileText,
   Filter,
-  Layers3,
   Map,
   MapPin,
   MoreHorizontal,
@@ -25,6 +24,7 @@ import {
 import { toast } from "sonner";
 import PortalChrome from "@/components/PortalChrome";
 import { buildReportText, dashboardPeriods, totalForPeriod, type DashboardPeriod } from "@/lib/dashboardData";
+import { placesApi, type PopularPlace, type TrendingPlace } from "@/lib/api";
 
 const regions = [
   { name: "제주특별자치도", value: "24,820", change: "+18.4%", tone: "up", color: "#9ee36f" },
@@ -33,58 +33,60 @@ const regions = [
   { name: "강원특별자치도", value: "11,860", change: "-2.4%", tone: "down", color: "#f6bd68" },
 ];
 
-const routes = [
-  { rank: "01", route: "성산일출봉 → 섭지코지 → 우도", meta: "제주 동부 · 평균 1.8일", count: "1,284회", delta: "+24.8%", color: "#9ee36f" },
-  { rank: "02", route: "해운대 → 광안리 → 감천문화마을", meta: "부산 · 평균 1.2일", count: "964회", delta: "+18.2%", color: "#69d6c0" },
-  { rank: "03", route: "북촌한옥마을 → 서촌 → 익선동", meta: "서울 종로 · 평균 0.8일", count: "788회", delta: "+11.6%", color: "#7fb7ff" },
-];
-
-const bars = [38, 44, 42, 57, 49, 63, 68, 60, 72, 66, 78, 84, 76, 89, 92, 86, 100, 93, 96, 88, 91, 97, 84, 90];
-
-function MetricCard({ icon, label, value, change, note, accent }: { icon: React.ReactNode; label: string; value: string; change: string; note: string; accent: string }) {
-  return (
-    <div className="metric-card" style={{ "--metric-accent": accent } as React.CSSProperties}>
-      <div className="metric-top"><span className="metric-icon">{icon}</span><span className="metric-label">{label}</span><MoreHorizontal size={17} className="muted" /></div>
-      <div className="metric-value">{value}</div>
-      <div className="metric-bottom"><span className="change"><ArrowUpRight size={14} />{change}</span><span>{note}</span></div>
-    </div>
-  );
-}
-
-function TinySparkline({ color = "#9ee36f" }: { color?: string }) {
-  return <svg className="sparkline" viewBox="0 0 112 36" preserveAspectRatio="none" aria-hidden="true"><path d="M1 30 C10 29, 12 20, 20 24 S32 28, 39 18 S50 26, 58 20 S72 8, 80 14 S92 19, 99 8 S106 12,111 2" fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" /></svg>;
-}
-
-function RouteMap() {
-  return (
-    <div className="route-map" aria-label="관광지 이동 흐름 지도">
-      <div className="map-grid" />
-      <div className="map-water" />
-      <svg className="map-lines" viewBox="0 0 620 350" preserveAspectRatio="none">
-        <path d="M78 260 C122 217, 165 230, 192 172 S280 120, 317 161 S382 236, 430 184 S507 115, 564 136" className="route route-muted" />
-        <path d="M102 297 C155 260, 184 246, 217 202 S273 172, 314 161 S374 131, 417 98 S489 74, 548 88" className="route route-blue" />
-        <path d="M122 235 C161 201, 210 207, 242 166 S318 134, 350 118 S433 125, 462 165 S510 221, 578 211" className="route route-green" />
-        <path d="M70 130 C143 121, 189 105, 238 122 S313 205, 361 220 S439 232, 509 272" className="route route-orange" />
-      </svg>
-      <div className="map-node n1"><span>성산일출봉</span><b>1,284</b></div>
-      <div className="map-node n2"><span>섭지코지</span><b>964</b></div>
-      <div className="map-node n3"><span>우도</span><b>752</b></div>
-      <div className="map-node n4"><span>함덕해수욕장</span><b>618</b></div>
-      <div className="map-node n5"><span>제주공항</span><b>488</b></div>
-      <div className="map-label jeju">JEJU</div>
-      <div className="map-control"><Layers3 size={15} /> 관광지</div>
-      <div className="map-legend"><span><i className="legend-dot green" /> 인기 루트</span><span><i className="legend-dot blue" /> 신규 흐름</span><span><i className="legend-dot orange" /> 주의 구간</span></div>
-    </div>
-  );
-}
-
 export default function Dashboard() {
   const [period, setPeriod] = useState<DashboardPeriod>("이번 달");
   const [filterOpen, setFilterOpen] = useState(false);
   const [region, setRegion] = useState("전체 지역");
   const [reportReady, setReportReady] = useState(false);
+  const [popularPlaces, setPopularPlaces] = useState<PopularPlace[]>([]);
+  const [trendingPlaces, setTrendingPlaces] = useState<TrendingPlace[]>([]);
+
+  useEffect(() => {
+    placesApi.popular(3)
+      .then((res) => setPopularPlaces(res.data))
+      .catch((err) => console.error("인기 장소 조회 실패:", err));
+  }, []);
+
+  useEffect(() => {
+  placesApi.trending(3)
+    .then((res) => setTrendingPlaces(res.data))
+    .catch((err) => console.error("급상승 장소 조회 실패:", err));
+}, []);
 
   const chartTotal = useMemo(() => totalForPeriod(period), [period]);
+  const routeColors = ["#9ee36f", "#69d6c0", "#7fb7ff"];
+
+  const bars = [38, 44, 42, 57, 49, 63, 68, 60, 72, 66, 78, 84, 76, 89, 92, 86, 100, 93, 96, 88, 91, 97, 84, 90];
+
+  function MetricCard({ icon, label, value, change, note, accent }: { icon: React.ReactNode; label: string; value: string; change: string; note: string; accent: string }) {
+    return (
+      <div className="metric-card" style={{ "--metric-accent": accent } as React.CSSProperties}>
+        <div className="metric-top"><span className="metric-icon">{icon}</span><span className="metric-label">{label}</span><MoreHorizontal size={17} className="muted" /></div>
+        <div className="metric-value">{value}</div>
+        <div className="metric-bottom"><span className="change"><ArrowUpRight size={14} />{change}</span><span>{note}</span></div>
+      </div>
+    );
+  }
+
+  function TinySparkline({ color = "#9ee36f" }: { color?: string }) {
+    return <svg className="sparkline" viewBox="0 0 112 36" preserveAspectRatio="none" aria-hidden="true"><path d="M1 30 C10 29, 12 20, 20 24 S32 28, 39 18 S50 26, 58 20 S72 8, 80 14 S92 19, 99 8 S106 12,111 2" fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" /></svg>;
+  }
+
+  function RouteMap() {
+    return (
+      <div className="route-list">
+        {trendingPlaces.map((place, index) => (
+          <button className="route-row" key={place.spotId} onClick={() => toast.info(`${place.name} 상세 분석을 준비 중입니다.`)}>
+            <span className="route-rank">0{index + 1}</span>
+            <span className="route-accent" style={{ background: routeColors[index % routeColors.length] }} />
+            <div className="route-copy"><b>{place.name}</b><span>{place.category} · {place.address}</span></div>
+            <div className="route-stats"><b>{place.recentVisitCount}회 방문</b></div>
+            <ChevronRight size={17} className="muted" />
+          </button>
+        ))}
+      </div>
+    );
+  }
 
   function downloadReport() {
     const content = buildReportText(period, region);
@@ -111,7 +113,7 @@ export default function Dashboard() {
 
       <section className="panel map-panel"><div className="panel-head map-head"><div><div className="section-kicker">MOVEMENT NETWORK</div><h2>여행 루트 네트워크</h2><p>실제 여행객이 함께 방문한 관광지의 연결 흐름을 보여줍니다.</p></div><div className="map-actions"><button className="outline-button" onClick={() => toast.info("지도 레이어를 변경했습니다.")}><Map size={15} />레이어</button><button className="outline-button" onClick={() => toast.success("지도 데이터를 CSV로 준비했습니다.")}><Download size={15} />내보내기</button></div></div><RouteMap /></section>
 
-      <div id="dashboard-products" className="bottom-grid"><section className="panel routes-panel"><div className="panel-head"><div><div className="section-kicker">POPULAR COMBINATIONS</div><h2>인기 관광지 조합</h2></div><button className="more-button" onClick={() => toast.info("인기 조합 전체 보기를 준비 중입니다.")}><MoreHorizontal size={18} /></button></div><div className="route-list">{routes.map((route) => <button className="route-row" key={route.rank} onClick={() => toast.info(`${route.route} 상세 분석을 준비 중입니다.`)}><span className="route-rank">{route.rank}</span><span className="route-accent" style={{ background: route.color }} /><div className="route-copy"><b>{route.route}</b><span>{route.meta}</span></div><div className="route-stats"><b>{route.count}</b><span><ArrowUpRight size={13} />{route.delta}</span></div><ChevronRight size={17} className="muted" /></button>)}</div><button className="text-link" onClick={() => toast.info("루트 분석 화면을 준비 중입니다.")}>모든 조합 분석하기 <ChevronRight size={15} /></button></section><section className="panel opportunity-panel"><div className="opportunity-glow" /><div className="section-kicker">NEXT OPPORTUNITY</div><div className="opportunity-icon"><Sparkles size={21} /></div><h2>새로운 상품 기회를<br /><em>발견했어요.</em></h2><p>제주 동부 해안에 머무는 여행객이<br />지난달보다 24.8% 늘었습니다.</p><button className="dark-button" onClick={() => toast.success("상품 설계 화면을 열었습니다.")}>상품 초안 만들기 <ArrowUpRight size={16} /></button><div className="opportunity-meta"><span><MapPin size={14} />제주 동부</span><span><TrendingUp size={14} />급상승 루트</span></div></section></div>
+      <div id="dashboard-products" className="bottom-grid"><section className="panel routes-panel"><div className="panel-head"><div><div className="section-kicker">POPULAR COMBINATIONS</div><h2>인기 관광지 조합</h2></div><button className="more-button" onClick={() => toast.info("인기 조합 전체 보기를 준비 중입니다.")}><MoreHorizontal size={18} /></button></div><div className="route-list">{popularPlaces.map((place, index) => <button className="route-row" key={place.spotId} onClick={() => toast.info(`${place.name} 상세 분석을 준비 중입니다.`)}><span className="route-rank">0{index + 1}</span><span className="route-accent" style={{ background: routeColors[index % routeColors.length] }} /><div className="route-copy"><b>{place.name}</b><span>{place.category} · {place.address}</span></div><div className="route-stats"><b>{place.savedCount}회 저장</b></div><ChevronRight size={17} className="muted" /></button>)}</div><button className="text-link" onClick={() => toast.info("루트 분석 화면을 준비 중입니다.")}>모든 조합 분석하기 <ChevronRight size={15} /></button></section><section className="panel opportunity-panel"><div className="opportunity-glow" /><div className="section-kicker">NEXT OPPORTUNITY</div><div className="opportunity-icon"><Sparkles size={21} /></div><h2>새로운 상품 기회를<br /><em>발견했어요.</em></h2><p>제주 동부 해안에 머무는 여행객이<br />지난달보다 24.8% 늘었습니다.</p><button className="dark-button" onClick={() => toast.success("상품 설계 화면을 열었습니다.")}>상품 초안 만들기 <ArrowUpRight size={16} /></button><div className="opportunity-meta"><span><MapPin size={14} />제주 동부</span><span><TrendingUp size={14} />급상승 루트</span></div></section></div>
 
       <footer className="page-footer"><span>Trip Ping Insight Portal · 데이터 기준 2026.08.31</span><span>한국관광공사 OpenAPI + Trip Ping 익명화 이동 데이터</span></footer>
 
