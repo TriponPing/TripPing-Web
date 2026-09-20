@@ -537,7 +537,7 @@ export default function ProductDetail() {
                       <span style={{ flex: 1, fontSize: 10, color: "#4d6570" }}>
                         <b>{place.name}</b>
                         <small style={{ display: "block", color: "#9eacb2" }}>
-                          {[place.category, place.address]
+                          {[categoryLabel(place.category), place.address]
                             .filter(Boolean)
                             .join(" · ")}
                         </small>

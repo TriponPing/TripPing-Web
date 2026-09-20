@@ -216,11 +216,21 @@ export type RouteRanking = {
   routeName: string;
   visitCount: number;
   changeRate: number;
+  // routeName과 같은 순서의 spotId 목록. 대체 관광지 추천(스팟별 alternatives 조회)에 쓴다.
+  spotIds: number[];
 };
 
 export type DailyVisit = {
   date: string;
   visitCount: number;
+};
+
+// 관광지들에 실제로 쌓인 평점·후기 근거. "상품 기획안" 보고서에서 관리자가 입력한
+// 스펙이 아니라 실제 Pinger 반응을 그대로 보여주는 데 쓴다.
+export type SpotEvidence = {
+  averageRating: number | null; // 평점이 하나도 없으면 null (지어내지 않음)
+  ratingCount: number;
+  sampleComments: string[];
 };
 
 // 한국관광공사 "빅데이터 지역별 방문자수(DataLabService)" 기준 국가 통계 방문자수.
@@ -242,6 +252,8 @@ export type ReportSummary = {
   region: string;
   status: ReportStatus;
   createdAt: string;
+  // 상품 기획안 유형일 때만 값이 있다. PDF 생성 시 이 id로 상품 상세를 다시 조회한다.
+  productId: number | null;
 };
 
 export type ReportDetail = ReportSummary & {
@@ -253,6 +265,8 @@ export type ReportCreateRequest = {
   type: string;
   period: string;
   region: string;
+  // type이 "상품 기획안"일 때만 채운다. 있으면 백엔드가 period/region 대신 이 상품 기준으로 생성한다.
+  productId?: number;
 };
 
 export const insightApi = {
@@ -265,6 +279,8 @@ export const insightApi = {
     api.get<RouteRanking[]>("/b2b/insight/trends/routes", { params: { period, region, endDate, startDate } }),
   dailyVisits: (period: string, region: string) =>
     api.get<DailyVisit[]>("/b2b/insight/trends/daily", { params: { period, region } }),
+  spotEvidence: (spotIds: number[]) =>
+    api.get<SpotEvidence>("/b2b/insight/spots/evidence", { params: { spotIds: spotIds.join(",") } }),
   regionalVisitors: (period: string, region: string) =>
     api.get<RegionalVisitor[]>("/b2b/insight/trends/regional-visitors", { params: { period, region } }),
   reports: () => api.get<ReportSummary[]>("/b2b/insight/reports"),
@@ -272,6 +288,7 @@ export const insightApi = {
     api.post<ReportDetail>("/b2b/insight/reports", data),
   reportDetail: (reportId: number) =>
     api.get<ReportDetail>(`/b2b/insight/reports/${reportId}`),
+  deleteReport: (reportId: number) => api.delete(`/b2b/insight/reports/${reportId}`),
 };
 
 export type SpotSearchResult = {

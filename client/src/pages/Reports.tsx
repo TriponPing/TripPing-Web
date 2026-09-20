@@ -1,4 +1,4 @@
-import { BarChart3, CalendarDays, CheckCircle2, Download, FileText, Filter, Plus, Share2, Sparkles, TrendingUp } from "lucide-react";
+import { BarChart3, CalendarDays, CheckCircle2, Download, FileText, Filter, Plus, Sparkles, Trash2, TrendingUp } from "lucide-react";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -6,8 +6,11 @@ import { AxiosError } from "axios";
 import PortalChrome from "@/components/PortalChrome";
 import { insightApi, placesApi, type ReportCreateRequest } from "@/lib/api";
 import { ALL_REGIONS_LABEL, insightPeriods } from "@/lib/dashboardData";
+import { downloadReportPdf } from "@/lib/reportPdf";
 
-const reportTypes = ["월간 트렌드", "루트 네트워크", "관광상품 기획안"] as const;
+const reportTypes = ["트렌드 분석", "상품 기획안", "루트 네트워크"] as const;
+const ALL_REPORTS_FILTER = "전체 보고서";
+const reportFilters = [ALL_REPORTS_FILTER, ...reportTypes] as const;
 
 const emptyDraft: ReportCreateRequest = {
   title: "",
@@ -19,12 +22,15 @@ const emptyDraft: ReportCreateRequest = {
 export default function Reports() {
   const [showModal, setShowModal] = useState(false);
   const [draft, setDraft] = useState<ReportCreateRequest>(emptyDraft);
+  const [filterType, setFilterType] = useState<string>(ALL_REPORTS_FILTER);
   const queryClient = useQueryClient();
 
   const reportsQuery = useQuery({
     queryKey: ["insight", "reports"],
     queryFn: () => insightApi.reports().then((res) => res.data),
   });
+
+  const filteredReports = reportsQuery.data?.filter((r) => filterType === ALL_REPORTS_FILTER || r.type === filterType);
 
   // Trends.tsx와 같은 이유 — 백엔드 region 테이블의 실제 region_name을 그대로 써야
   // 보고서 생성 시 region 필터가 정확히 집계된다.
@@ -47,20 +53,37 @@ export default function Reports() {
     },
   });
 
-  function downloadReport(reportId: number, title: string) {
-    insightApi
-      .reportDetail(reportId)
-      .then((res) => {
-        const blob = new Blob([res.data.content], { type: "text/plain;charset=utf-8" });
-        const url = URL.createObjectURL(blob);
-        const anchor = document.createElement("a");
-        anchor.href = url;
-        anchor.download = `${title}.txt`;
-        anchor.click();
-        URL.revokeObjectURL(url);
-        toast.success("PDF 보고서를 다운로드했습니다.");
-      })
-      .catch(() => toast.error("보고서를 불러오지 못했습니다."));
+  const [downloadingId, setDownloadingId] = useState<number | null>(null);
+
+  async function downloadReport(reportId: number) {
+    setDownloadingId(reportId);
+    try {
+      const detail = await insightApi.reportDetail(reportId).then((res) => res.data);
+      await downloadReportPdf(detail);
+      toast.success("PDF 보고서를 다운로드했습니다.");
+    } catch {
+      toast.error("보고서를 생성하지 못했습니다.");
+    } finally {
+      setDownloadingId(null);
+    }
+  }
+
+  const deleteReport = useMutation({
+    mutationFn: (reportId: number) => insightApi.deleteReport(reportId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["insight", "reports"] });
+      toast.success("보고서를 삭제했습니다.");
+    },
+    onError: () => toast.error("보고서를 삭제하지 못했습니다."),
+  });
+
+  function handleDelete(reportId: number, title: string) {
+    toast(`"${title}" 보고서를 삭제할까요?`, {
+      description: "삭제하면 되돌릴 수 없습니다.",
+      duration: 15000,
+      action: { label: "삭제", onClick: () => deleteReport.mutate(reportId) },
+      cancel: { label: "취소", onClick: () => {} },
+    });
   }
 
   return (
@@ -86,9 +109,11 @@ export default function Reports() {
 
       <div className="report-toolbar">
         <div className="period-pills">
-          <button className="selected">전체 보고서</button>
-          <button>트렌드 분석</button>
-          <button>상품 기획안</button>
+          {reportFilters.map((f) => (
+            <button key={f} className={filterType === f ? "selected" : ""} onClick={() => setFilterType(f)}>
+              {f}
+            </button>
+          ))}
         </div>
         <button className="report-create" onClick={() => setShowModal(true)}>
           <Plus size={15} />새 보고서 만들기
@@ -99,15 +124,18 @@ export default function Reports() {
         {reportsQuery.isLoading && <p className="report-grid-empty">불러오는 중...</p>}
         {reportsQuery.isError && <p className="report-grid-empty">보고서 목록을 불러오지 못했습니다.</p>}
         {reportsQuery.data?.length === 0 && <p className="report-grid-empty">아직 만든 보고서가 없습니다.</p>}
-        {reportsQuery.data?.map((report) => (
+        {reportsQuery.data && reportsQuery.data.length > 0 && filteredReports?.length === 0 && (
+          <p className="report-grid-empty">{filterType} 보고서가 없습니다.</p>
+        )}
+        {filteredReports?.map((report) => (
           <div className="report-card" key={report.reportId}>
             <div className="report-card-icon blue">
               <FileText size={21} />
             </div>
             <div className="report-card-top">
               <span>{report.type}</span>
-              <button>
-                <Share2 size={15} />
+              <button onClick={() => handleDelete(report.reportId, report.title)} disabled={deleteReport.isPending} title="보고서 삭제">
+                <Trash2 size={15} />
               </button>
             </div>
             <h3>{report.title}</h3>
@@ -120,9 +148,9 @@ export default function Reports() {
                 {report.status === "COMPLETED" ? "완료" : "작성 중"}
               </span>
               {report.status === "COMPLETED" ? (
-                <button onClick={() => downloadReport(report.reportId, report.title)}>
+                <button onClick={() => downloadReport(report.reportId)} disabled={downloadingId === report.reportId}>
                   <Download size={14} />
-                  PDF
+                  {downloadingId === report.reportId ? "생성 중..." : "PDF"}
                 </button>
               ) : (
                 <button onClick={() => toast.info("보고서 이어 작성 화면을 준비 중입니다.")}>
@@ -138,7 +166,7 @@ export default function Reports() {
         <BarChart3 size={19} />
         <span>
           <b>보고서에 포함되는 데이터</b>
-          <small>방문 추이 · 급상승 루트 · 인기 관광지 조합 · 불편 구간 · 대체 관광지 추천</small>
+          <small>방문 추이 · 급상승 루트 · 인기 관광지 조합 · 대체 관광지 추천</small>
         </span>
         <Filter size={15} />
       </div>
@@ -192,11 +220,7 @@ export default function Reports() {
                 ))}
               </select>
             </label>
-            <button
-              className="report-submit"
-              disabled={!draft.title || createReport.isPending}
-              onClick={() => createReport.mutate()}
-            >
+            <button className="report-submit" disabled={!draft.title || createReport.isPending} onClick={() => createReport.mutate()}>
               {createReport.isPending ? "생성 중..." : "분석 시작하기"} <TrendingUp size={15} />
             </button>
           </div>
