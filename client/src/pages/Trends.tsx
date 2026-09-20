@@ -1,9 +1,11 @@
-import { ArrowDownRight, ArrowUpRight, CalendarDays, Download, Filter, MapPin, Route, Sparkles, TrendingUp } from "lucide-react";
+import { ArrowDownRight, ArrowUpRight, Download, Filter, MapPin, Route, Sparkles, TrendingUp } from "lucide-react";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
+import type { DateRange } from "react-day-picker";
 import PortalChrome from "@/components/PortalChrome";
-import { insightApi, placesApi, type DailyVisit } from "@/lib/api";
+import DateRangePicker from "@/components/DateRangePicker";
+import { insightApi, placesApi } from "@/lib/api";
 import { ALL_REGIONS_LABEL, insightPeriods, type InsightPeriod } from "@/lib/dashboardData";
 
 // "2026-08-01" -> "8/1"
@@ -12,47 +14,58 @@ function formatMonthDay(isoDate: string) {
   return `${Number(month)}/${Number(day)}`;
 }
 
-// dailyQuery 결과의 첫/마지막 날짜로 툴바 날짜 표시를 만든다 ("2026.08.01 — 08.31").
-// 예전엔 이 라벨이 고정 문자열이라 기간을 "최근 7일"로 바꿔도 안 바뀌는 문제가 있었음.
-function formatRangeLabel(daily: DailyVisit[]) {
-  if (daily.length === 0) return "불러오는 중...";
-  const [startY, startM, startD] = daily[0].date.split("-");
-  const [, endM, endD] = daily[daily.length - 1].date.split("-");
-  return `${startY}.${startM}.${startD} — ${endM}.${endD}`;
+function toIsoDate(date: Date) {
+  const offset = date.getTimezoneOffset();
+  return new Date(date.getTime() - offset * 60000).toISOString().slice(0, 10);
+}
+
+function fmtDot(date: Date) {
+  return `${date.getFullYear()}.${String(date.getMonth() + 1).padStart(2, "0")}.${String(date.getDate()).padStart(2, "0")}`;
+}
+
+// 기간 pill(최근 7일/30일/1년)을 누르면 그에 맞는 날짜 범위를 계산해서 달력에도 반영한다.
+function rangeForPeriod(period: InsightPeriod, end: Date): DateRange {
+  const start = new Date(end);
+  if (period === "최근 7일") start.setDate(end.getDate() - 6);
+  else if (period === "최근 1년") start.setFullYear(end.getFullYear() - 1, end.getMonth(), end.getDate() + 1);
+  else start.setDate(end.getDate() - 29);
+  return { from: start, to: end };
 }
 
 export default function Trends() {
+  const todayDate = new Date();
   const [period, setPeriod] = useState<InsightPeriod>("최근 30일");
   const [region, setRegion] = useState<string>(ALL_REGIONS_LABEL);
+  const [range, setRange] = useState<DateRange>(() => rangeForPeriod("최근 30일", todayDate));
 
-  // 드롭다운에 백엔드 region 테이블의 실제 region_name("서울", "제주" 등)을 그대로 쓴다 —
-  // 프론트에서 "서울특별시" 같은 긴 이름을 임의로 만들면 InsightRouteRepository의
-  // exact-match 쿼리에 안 걸려서 항상 0건으로 나온다 (실제로 겪은 문제).
+  const startDate = range.from ? toIsoDate(range.from) : undefined;
+  const endDate = range.to ? toIsoDate(range.to) : startDate;
+
+  function selectPeriod(item: InsightPeriod) {
+    setPeriod(item);
+    setRange(rangeForPeriod(item, todayDate));
+  }
+
   const regionsQuery = useQuery({
     queryKey: ["regions"],
     queryFn: () => placesApi.regions().then((res) => res.data),
   });
 
   const summaryQuery = useQuery({
-    queryKey: ["insight", "trends-summary", period, region],
-    queryFn: () => insightApi.trendsSummary(period, region).then((res) => res.data),
+    queryKey: ["insight", "trends-summary", region, startDate, endDate],
+    queryFn: () => insightApi.trendsSummary(period, region, endDate, startDate).then((res) => res.data),
   });
 
   const routesQuery = useQuery({
-    queryKey: ["insight", "trends-routes", period, region],
-    queryFn: () => insightApi.risingRoutes(period, region).then((res) => res.data),
+    queryKey: ["insight", "trends-routes", region, startDate, endDate],
+    queryFn: () => insightApi.risingRoutes(period, region, endDate, startDate).then((res) => res.data),
   });
 
-  // 일자별 이동량(막대그래프) - summary의 "총 방문 핑"과 같은 집계를 날짜별로 쪼갠 것.
   const dailyQuery = useQuery({
     queryKey: ["insight", "trends-daily", period, region],
     queryFn: () => insightApi.dailyVisits(period, region).then((res) => res.data),
   });
 
-  // 한국관광공사 "빅데이터 지역별 방문자수(DataLabService)" 기준 국가 통계 방문자수.
-  // 우리 자체 방문 핑 데이터가 아직 적어서(콜드스타트), 특정 지역을 골랐을 때 실제 규모를
-  // 참고선처럼 같이 보여주기 위한 것. "전체 지역"이거나 매핑이 없는 지역이면 백엔드가 빈
-  // 배열을 내려주고, 그럴 땐 아래에서 hasRegionalContext가 false가 되어 안 보인다.
   const regionalQuery = useQuery({
     queryKey: ["insight", "trends-regional-visitors", period, region],
     queryFn: () => insightApi.regionalVisitors(period, region).then((res) => res.data),
@@ -64,10 +77,8 @@ export default function Trends() {
 
   const dailyData = dailyQuery.data ?? [];
   const maxDailyVisits = Math.max(1, ...dailyData.map((d) => d.visitCount));
-  // "최근 N일" 구간 중 마지막 7일(또는 구간 전체가 7일 이하면 전체)을 파란색으로 강조.
   const highlightCount = Math.min(7, dailyData.length);
   const highlightStartIndex = dailyData.length - highlightCount;
-  // 날짜가 많을 때(최근 30일/1년)는 x축에 5개 지점만 골라서 보여준다.
   const labelIndexes =
     dailyData.length <= 7
       ? dailyData.map((_, i) => i)
@@ -84,15 +95,75 @@ export default function Trends() {
   const regionalTotal = (regionalQuery.data ?? []).reduce((sum, d) => sum + d.totalVisitors, 0);
   const hasRegionalContext = region !== ALL_REGIONS_LABEL && regionalTotal > 0;
 
+  function csvField(value: string | number) {
+    const s = String(value);
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  }
+
+  function csvRow(...cells: (string | number)[]) {
+    return cells.map(csvField).join(",");
+  }
+
+  function exportCsv() {
+    if (!summaryQuery.data || !routesQuery.data) {
+      toast.error("데이터를 아직 불러오는 중입니다. 잠시 후 다시 시도해주세요.");
+      return;
+    }
+    const now = new Date();
+    const generatedAt = `${fmtDot(now)} ${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+    const changeRate = summaryQuery.data.changeRate;
+    const routes = routesQuery.data;
+
+    const lines = [
+      csvRow("Trip Ping 트렌드 분석 리포트"),
+      "",
+      csvRow("생성일시", generatedAt),
+      csvRow("조회 지역", region),
+      csvRow("조회 기간", period),
+      csvRow("선택 구간", `${range.from ? fmtDot(range.from) : ""} ~ ${range.to ? fmtDot(range.to) : ""}`),
+      "",
+      csvRow("[ 요약 지표 ]"),
+      csvRow("항목", "값"),
+      csvRow("총 방문 핑", `${summaryQuery.data.totalVisits.toLocaleString()}건`),
+      csvRow("이전 기간 대비 증감률", `${changeRate >= 0 ? "+" : ""}${changeRate.toFixed(1)}%`),
+      csvRow("급상승 루트 수", `${routes.length}개`),
+      "",
+      csvRow(`[ 급상승 루트 랭킹 ]`),
+      csvRow("순위", "루트", "방문 수", "증감률"),
+    ];
+
+    if (routes.length === 0) {
+      lines.push(csvRow("-", "선택한 기간·지역에 급상승 루트가 없습니다.", "-", "-"));
+    } else {
+      routes.forEach((row, i) => {
+        lines.push(csvRow(`${i + 1}위`, row.routeName, `${row.visitCount.toLocaleString()}건`, `${row.changeRate >= 0 ? "+" : ""}${row.changeRate.toFixed(1)}%`));
+      });
+    }
+
+    lines.push("", csvRow("Trip Ping B2B 포털에서 자동 생성된 리포트입니다."));
+
+    const blob = new Blob(["﻿" + lines.join("\n")], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `trip-ping-trends-${startDate}_${endDate}.csv`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+    toast.success("트렌드 분석 리포트를 다운로드했습니다.");
+  }
+
   return (
     <PortalChrome title="트렌드 분석" eyebrow="TOURISM TREND INTELLIGENCE">
       <div className="trend-toolbar">
         <div className="period-pills">
-          {insightPeriods.map((item) => (
-            <button key={item} className={period === item ? "selected" : ""} onClick={() => setPeriod(item)}>
-              {item}
-            </button>
-          ))}
+          {insightPeriods.map((item) => {
+            const matches = range.to && toIsoDate(range.to) === toIsoDate(todayDate) && startDate === toIsoDate(rangeForPeriod(item, todayDate).from!);
+            return (
+              <button key={item} className={matches ? "selected" : ""} onClick={() => selectPeriod(item)}>
+                {item}
+              </button>
+            );
+          })}
         </div>
         <div className="trend-filters">
           <label>
@@ -106,11 +177,8 @@ export default function Trends() {
               ))}
             </select>
           </label>
-          <label>
-            <CalendarDays size={14} />
-            {formatRangeLabel(dailyData)}
-          </label>
-          <button onClick={() => toast.success("트렌드 분석 리포트를 다운로드했습니다.")}>
+          <DateRangePicker value={range} onChange={setRange} maxDate={todayDate} />
+          <button onClick={exportCsv}>
             <Download size={14} />
             내보내기
           </button>
@@ -128,7 +196,6 @@ export default function Trends() {
             {changeRate !== null ? `${Math.abs(changeRate).toFixed(1)}% 이전 기간 대비` : "불러오는 중..."}
           </small>
         </div>
-        {/* 아래 2개 KPI는 아직 대응하는 백엔드 API가 없어 임시 고정값으로 남겨둠 */}
         <div className="trend-kpi">
           <span>
             <TrendingUp size={16} />급상승 루트
@@ -202,9 +269,6 @@ export default function Trends() {
               <i className="gray-dot" />
               이전 날짜
             </span>
-            {/* 지역을 선택하면 관광공사 통계(DataLabService) 실데이터로 바뀜.
-                "전체 지역"이거나 매핑된 지역코드가 없으면 아직 고정 예시 문구를 보여줌
-                (item 4: 동적 인사이트 문구 생성은 별도 작업 예정) */}
             <b>
               {hasRegionalContext ? (
                 <>
@@ -230,7 +294,7 @@ export default function Trends() {
               <TrendingUp size={19} />
             </div>
             <b>{routesQuery.data?.[0]?.routeName ?? "데이터 없음"}</b>
-            <span>{period} 방문량</span>
+            <span>선택 기간 방문량</span>
             <strong>{routesQuery.data?.[0] ? `${routesQuery.data[0].changeRate >= 0 ? "+" : ""}${routesQuery.data[0].changeRate.toFixed(1)}%` : "—"}</strong>
           </div>
           <p>성산일출봉 이후 섭지코지로 이어지는 이동이 빠르게 늘고 있어요. 기존 동선에 우도를 결합한 1박 2일 상품을 검토해보세요.</p>
