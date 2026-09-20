@@ -282,10 +282,13 @@ export type ReportCreateRequest = {
 };
 
 export const insightApi = {
-  trendsSummary: (period: string, region: string) =>
-    api.get<TrendsSummary>("/b2b/insight/trends/summary", { params: { period, region } }),
-  risingRoutes: (period: string, region: string) =>
-    api.get<RouteRanking[]>("/b2b/insight/trends/routes", { params: { period, region } }),
+  // endDate: "YYYY-MM-DD" 구간의 마지막 날 (생략하면 백엔드가 오늘로 계산).
+  // startDate까지 같이 주면 period는 무시되고 그 구간을 그대로 쓴다 (달력에서 직접
+  // 범위를 고른 경우).
+  trendsSummary: (period: string, region: string, endDate?: string, startDate?: string) =>
+    api.get<TrendsSummary>("/b2b/insight/trends/summary", { params: { period, region, endDate, startDate } }),
+  risingRoutes: (period: string, region: string, endDate?: string, startDate?: string) =>
+    api.get<RouteRanking[]>("/b2b/insight/trends/routes", { params: { period, region, endDate, startDate } }),
   dailyVisits: (period: string, region: string) =>
     api.get<DailyVisit[]>("/b2b/insight/trends/daily", { params: { period, region } }),
   reports: () => api.get<ReportSummary[]>("/b2b/insight/reports"),
