@@ -235,3 +235,53 @@ export const organizationApi = {
   revokeApiKey: (keyId: number) =>
     api.delete(`/b2b/organization/api-keys/${keyId}`),
 };
+
+// 기관 전용 - 트렌드/보고서 (InsightController / ReportController).
+// period/region은 프론트가 쓰는 한글 문자열("최근 30일", "전체 지역" 등)을
+// 그대로 쿼리 파라미터로 받는다 — 별도 코드 변환 없음.
+export type TrendsSummary = {
+  totalVisits: number;
+  changeRate: number;
+};
+
+export type RouteRanking = {
+  routeName: string;
+  visitCount: number;
+  changeRate: number;
+};
+
+export type ReportStatus = "COMPLETED" | "IN_PROGRESS";
+
+export type ReportSummary = {
+  reportId: number;
+  title: string;
+  type: string;
+  period: string;
+  region: string;
+  status: ReportStatus;
+  createdAt: string;
+};
+
+// content(본문)는 상세/생성 응답에만 포함되고 목록에는 없다.
+export type ReportDetail = ReportSummary & {
+  content: string;
+};
+
+export type ReportCreateRequest = {
+  title: string;
+  type: string;
+  period: string;
+  region: string;
+};
+
+export const insightApi = {
+  trendsSummary: (period: string, region: string) =>
+    api.get<TrendsSummary>("/b2b/insight/trends/summary", { params: { period, region } }),
+  risingRoutes: (period: string, region: string) =>
+    api.get<RouteRanking[]>("/b2b/insight/trends/routes", { params: { period, region } }),
+  reports: () => api.get<ReportSummary[]>("/b2b/insight/reports"),
+  createReport: (data: ReportCreateRequest) =>
+    api.post<ReportDetail>("/b2b/insight/reports", data),
+  reportDetail: (reportId: number) =>
+    api.get<ReportDetail>(`/b2b/insight/reports/${reportId}`),
+};
