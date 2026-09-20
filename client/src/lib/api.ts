@@ -312,32 +312,11 @@ export type SpotSearchResult = {
   registered: boolean;
 };
 
-// 대체 관광지 후보 한 건.
-//
-// 추천 순서는 방문자 수 → 평점 → 거리 순이라, 핑이 아직 없는 장소끼리는
-// 가까운 곳부터 올라온다. 세 값 모두 화면에 근거로 보여준다.
-export type AlternativeSpot = {
-  spotId: number;
-  name: string;
-  category: string | null;
-  address: string | null;
-  latitude: number | null;
-  longitude: number | null;
-  imageUrl: string | null;
-  visitCount: number;
-  averageRating: number | null;
-  distanceKm: number;
-};
-
 export const spotsApi = {
   search: (query: string) =>
     api.get<SpotSearchResult[]>("/b2b/spots/search", { params: { query } }),
   register: (contentId: string) =>
     api.post<SpotSearchResult>("/b2b/spots/register", null, {
       params: { contentId },
-    }),
-  alternatives: (spotId: number, category?: string, limit = 4) =>
-    api.get<AlternativeSpot[]>(`/b2b/spots/${spotId}/alternatives`, {
-      params: { category, limit },
     }),
 };

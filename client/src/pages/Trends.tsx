@@ -49,6 +49,15 @@ export default function Trends() {
     queryFn: () => insightApi.dailyVisits(period, region).then((res) => res.data),
   });
 
+  // 한국관광공사 "빅데이터 지역별 방문자수(DataLabService)" 기준 국가 통계 방문자수.
+  // 우리 자체 방문 핑 데이터가 아직 적어서(콜드스타트), 특정 지역을 골랐을 때 실제 규모를
+  // 참고선처럼 같이 보여주기 위한 것. "전체 지역"이거나 매핑이 없는 지역이면 백엔드가 빈
+  // 배열을 내려주고, 그럴 땐 아래에서 hasRegionalContext가 false가 되어 안 보인다.
+  const regionalQuery = useQuery({
+    queryKey: ["insight", "trends-regional-visitors", period, region],
+    queryFn: () => insightApi.regionalVisitors(period, region).then((res) => res.data),
+  });
+
   const totalVisits = summaryQuery.data ? summaryQuery.data.totalVisits.toLocaleString() : "—";
   const changeRate = summaryQuery.data ? summaryQuery.data.changeRate : null;
   const routeTones = ["blue", "mint", "orange"] as const;
@@ -71,6 +80,9 @@ export default function Trends() {
             dailyData.length - 1,
           ])
         );
+
+  const regionalTotal = (regionalQuery.data ?? []).reduce((sum, d) => sum + d.totalVisitors, 0);
+  const hasRegionalContext = region !== ALL_REGIONS_LABEL && regionalTotal > 0;
 
   return (
     <PortalChrome title="트렌드 분석" eyebrow="TOURISM TREND INTELLIGENCE">
@@ -190,9 +202,19 @@ export default function Trends() {
               <i className="gray-dot" />
               이전 날짜
             </span>
-            {/* 아래 문구는 아직 실데이터 기반 자동생성이 아니라 고정 예시 문구임 */}
+            {/* 지역을 선택하면 관광공사 통계(DataLabService) 실데이터로 바뀜.
+                "전체 지역"이거나 매핑된 지역코드가 없으면 아직 고정 예시 문구를 보여줌
+                (item 4: 동적 인사이트 문구 생성은 별도 작업 예정) */}
             <b>
-              <TrendingUp size={13} /> 주말에 제주 동부 방문이 집중돼요
+              {hasRegionalContext ? (
+                <>
+                  <TrendingUp size={13} /> {region} 전체 방문자 {regionalTotal.toLocaleString()}명 · 관광공사 통계({period})
+                </>
+              ) : (
+                <>
+                  <TrendingUp size={13} /> 주말에 제주 동부 방문이 집중돼요
+                </>
+              )}
             </b>
           </div>
         </section>
