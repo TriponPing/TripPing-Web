@@ -221,6 +221,19 @@ export default function ProductDetail() {
     onError: () => toast.error("저장하지 못했습니다."),
   });
 
+  // 백엔드는 소프트 삭제라 목록에서만 사라진다. 그래도 담당자 입장에서는
+  // 되돌릴 방법이 화면에 없으므로 한 번 물어본다.
+  const remove = useMutation({
+    mutationFn: () => productsApi.remove(productId),
+    onSuccess: () => {
+      queryClient.removeQueries({ queryKey: ["product", productId] });
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+      toast.success("상품을 삭제했습니다.");
+      navigate("/products");
+    },
+    onError: () => toast.error("삭제하지 못했습니다."),
+  });
+
   useEffect(() => {
     if (product.data) setDraft(toDraft(product.data, regions));
   }, [product.data, regions]);
@@ -423,6 +436,22 @@ export default function ProductDetail() {
           >
             <Save size={14} />
             {save.isPending ? "저장 중…" : dirty ? "저장" : "저장됨"}
+          </button>
+          <button
+            onClick={() => {
+              if (
+                window.confirm(
+                  `'${draft.title}' 상품을 삭제할까요? 목록에서 사라집니다.`
+                )
+              ) {
+                remove.mutate();
+              }
+            }}
+            disabled={remove.isPending}
+            style={{ color: "#c2573f" }}
+          >
+            <Trash2 size={14} />
+            {remove.isPending ? "삭제 중…" : "삭제"}
           </button>
           <button
             className="detail-primary"
