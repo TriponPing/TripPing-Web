@@ -40,7 +40,7 @@ export function stopFromPlace(place: SpotSearchResult, region: string) {
     id: `spot-${place.spotId}-${Math.random().toString(36).slice(2, 7)}`,
     name: place.name,
     desc: categoryLabel(place.category) || place.address || "",
-    score: spotMeta(place.name)?.score ?? "-",
+    score: "-",
     congestion: spotMeta(place.name)?.congestion,
     region,
     spotId: place.spotId ?? undefined,
@@ -82,39 +82,44 @@ export type Congestion = (typeof congestionLevels)[number];
 export type Spot = {
   name: string;
   region: string;
-  score: string;
   congestion: Congestion;
 };
 
-// 혼잡도·평점 보조 데이터.
+// 혼잡도 보조 데이터.
 //
-// 여행객 앱에 핑·후기가 쌓이면 /places/{id}/detail의 averageRating으로
-// 대체된다. 지금은 그 값이 전부 null이라, 대체 관광지 추천을 돌리기 위해
-// 대표 관광지에 한해 여기에 들고 있는다. 이름은 실제 DB의 관광지명과 같다.
+// ⚠️ 평점(score)은 의도적으로 제거했다. 아직 아무도 평가하지 않은 관광지에
+// "4.8" 같은 숫자를 보여주면 그 근거를 설명할 수 없기 때문이다. 실제 평점은
+// 여행객 앱에 후기가 쌓이면 /places/{id}/detail의 averageRating에서 그대로
+// 가져온다 — 대체 관광지 목록은 이미 그 실제 값을 쓰고 있고, 값이 없으면
+// 아예 표시하지 않는다.
+//
+// 혼잡도는 "대체 관광지 추천을 언제 띄울지" 판단하는 용도로만 남겨둔 보조
+// 데이터다. 대표 관광지에 한해 들고 있으며 이름은 실제 DB의 관광지명과 같다.
 export const spotCatalog: Spot[] = [
-  { name: "성산일출봉", region: "제주", score: "4.8", congestion: "혼잡" },
-  { name: "섭지코지", region: "제주", score: "4.7", congestion: "보통" },
-  { name: "우도", region: "제주", score: "4.6", congestion: "보통" },
-  { name: "함덕해수욕장", region: "제주", score: "4.7", congestion: "여유" },
-  { name: "비자림", region: "제주", score: "4.5", congestion: "여유" },
-  { name: "해운대해수욕장", region: "부산", score: "4.7", congestion: "혼잡" },
-  { name: "광안리해수욕장", region: "부산", score: "4.6", congestion: "보통" },
-  { name: "감천문화마을", region: "부산", score: "4.4", congestion: "혼잡" },
-  { name: "흰여울문화마을", region: "부산", score: "4.6", congestion: "여유" },
-  { name: "북촌한옥마을", region: "서울", score: "4.5", congestion: "혼잡" },
-  { name: "익선동", region: "서울", score: "4.6", congestion: "보통" },
-  { name: "을지로", region: "서울", score: "4.6", congestion: "여유" },
+  { name: "성산일출봉", region: "제주", congestion: "혼잡" },
+  { name: "섭지코지", region: "제주", congestion: "보통" },
+  { name: "우도", region: "제주", congestion: "보통" },
+  { name: "함덕해수욕장", region: "제주", congestion: "여유" },
+  { name: "비자림", region: "제주", congestion: "여유" },
+  { name: "해운대해수욕장", region: "부산", congestion: "혼잡" },
+  { name: "광안리해수욕장", region: "부산", congestion: "보통" },
+  { name: "감천문화마을", region: "부산", congestion: "혼잡" },
+  { name: "흰여울문화마을", region: "부산", congestion: "여유" },
+  { name: "북촌한옥마을", region: "서울", congestion: "혼잡" },
+  { name: "익선동", region: "서울", congestion: "보통" },
+  { name: "을지로", region: "서울", congestion: "여유" },
 ];
 
 export function spotMeta(name: string) {
   return spotCatalog.find(spot => spot.name === name);
 }
 
-// 만족도가 낮거나 혼잡한 구간을 "대체 관광지 추천" 대상으로 본다.
-// 보조 데이터가 없는 관광지는 판단 근거가 없으므로 대상에서 제외한다.
+// 혼잡한 구간을 "대체 관광지 추천" 대상으로 본다.
+// 혼잡도 정보가 없는 관광지는 판단 근거가 없으므로 대상에서 제외한다.
+// (예전에는 평점이 낮은 경우도 대상에 넣었지만, 그 평점이 실제 데이터가
+//  아니어서 판단 근거로 쓸 수 없었다.)
 export function needsAlternative(stop: RouteStop) {
-  if (!stop.congestion && stop.score === "-") return false;
-  return Number(stop.score) < 4.5 || stop.congestion === "혼잡";
+  return stop.congestion === "혼잡";
 }
 
 // 일정에서 가장 많이 등장하는 지역.
@@ -140,7 +145,6 @@ export function suggestAlternatives(route: RouteStop[], forRegion?: string) {
     spot =>
       spot.region === region &&
       !used.has(spot.name) &&
-      spot.congestion !== "혼잡" &&
-      Number(spot.score) >= 4.5
+      spot.congestion !== "혼잡"
   );
 }

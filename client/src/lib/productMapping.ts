@@ -64,7 +64,9 @@ export function toRouteStops(
       id: `spot-${spot.spotId}-${spot.visitOrder}`,
       name,
       desc: spot.address ?? "",
-      score: meta?.score ?? "-",
+      // 평점은 실제 데이터가 쌓이기 전까지 비워둔다. 화면은 "-"일 때
+      // 평점 배지를 아예 그리지 않는다(ProductDetail 참고).
+      score: "-",
       congestion: meta?.congestion,
       region:
         meta?.region ??
