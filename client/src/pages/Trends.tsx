@@ -484,7 +484,7 @@ export default function Trends() {
             {hasRegionalSeries && (
               <span>
                 <i className="line-dot" />
-                지역 이동량 (관광공사 통계)
+                {region === ALL_REGIONS_LABEL ? "전국" : "지역"} 이동량 (관광공사 통계)
               </span>
             )}
             {regionalQuery.isFetching && chartData.length > 0 && (

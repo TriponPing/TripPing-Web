@@ -680,11 +680,18 @@ export default function Dashboard() {
           </div>
           <div className="chart-footer">
             <span><i className="dot mint" />Trip Ping 방문 핑</span>
-            {hasRegionalSeries && <span><i className="line-dot" />지역 이동량 (관광공사 통계)</span>}
+            {hasRegionalSeries && (
+              <span>
+                <i className="line-dot" />
+                {region === ALL_REGIONS_LABEL ? "전국" : "지역"} 이동량 (관광공사 통계)
+              </span>
+            )}
             {regionalQuery.isFetching && chartData.length > 0 && (
               <span className="legend-loading"><Loader2 size={12} className="spin" />지역 이동량 불러오는 중…</span>
             )}
-            {!hasRegionalSeries && <span className="chart-insight">지역을 선택하면 관광공사 이동량 추세가 함께 표시돼요</span>}
+            {!hasRegionalSeries && !isChartLoading && (
+              <span className="chart-insight">이 지역은 관광공사 이동량 통계가 제공되지 않아요</span>
+            )}
           </div>
           {hasRegionalSeries && (
             <p className="chart-footnote">
