@@ -33,7 +33,28 @@ import {
   Zap,
 } from "lucide-react";
 import { toast } from "sonner";
-import { buildReportText, dashboardPeriods, totalForPeriod, type DashboardPeriod } from "@/lib/dashboardData";
+// ⚠️ 이 화면은 App.tsx 라우팅에 연결되어 있지 않은 예전 대시보드 시안이다.
+// 실데이터 전환 과정에서 lib/dashboardData.ts의 더미 함수들을 제거했기 때문에,
+// 여기서만 쓰던 값들을 파일 안으로 옮겨 컴파일만 통과시켜 둔다.
+// (이 시안을 되살릴 계획이 없다면 파일째 삭제해도 된다.)
+const dashboardPeriods = ["이번 주", "이번 달", "최근 1년"] as const;
+type DashboardPeriod = (typeof dashboardPeriods)[number];
+
+function totalForPeriod(period: DashboardPeriod) {
+  if (period === "이번 주") return "8,612";
+  if (period === "최근 1년") return "128,404";
+  return "24,820";
+}
+
+function buildReportText(period: DashboardPeriod, region: string) {
+  return [
+    "Trip Ping Insight Report",
+    `기간: ${period}`,
+    `지역: ${region}`,
+    "",
+    `방문 핑: ${totalForPeriod(period)}`,
+  ].join("\n");
+}
 
 const regions = [
   { name: "제주특별자치도", value: "24,820", change: "+18.4%", tone: "up", color: "#9ee36f" },
